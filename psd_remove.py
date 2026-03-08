@@ -141,33 +141,37 @@ def measure_harmonic_power(freqs, psd, harmonics=HARMONICS, bandwidth=BANDWIDTH)
 # Outlier detection (STD-based)
 # ──────────────────────────────────────────────
 
-def find_outlier_channels(channel_data, threshold_std=OUTLIER_THRESH):
+def find_outlier_channels(channel_data, threshold_mads=OUTLIER_THRESH):
     """
     A channel is an outlier if its total harmonic noise power is
-    more than threshold_std standard deviations above the group mean.
+    more than threshold_mads * MAD above OR below the group median.
+
+    Uses median + MAD (robust to outliers inflating the spread).
     """
     totals = np.array([d['total_noise'] for d in channel_data])
 
-    group_mean = np.mean(totals)
-    group_std = np.std(totals)
+    group_median = np.median(totals)
+    mad = np.median(np.abs(totals - group_median))
 
-    if group_std == 0:
-        group_std = 1e-30
+    if mad == 0:
+        mad = 1e-30
 
     results = []
     for i, d in enumerate(channel_data):
-        deviation = (totals[i] - group_mean) / group_std
-        is_outlier = deviation > threshold_std
+        deviation = (totals[i] - group_median) / mad
+        is_outlier_high = deviation > threshold_mads
+        is_outlier_low = deviation < -threshold_mads
 
         results.append({
             'channel': d['channel'],
             'total_noise': d['total_noise'],
             'harm_powers': d['harm_powers'],
-            'deviation_std': round(deviation, 2),
-            'is_outlier': is_outlier,
+            'deviation_mads': round(deviation, 2),
+            'is_outlier': is_outlier_high,
+            'is_outlier_low': is_outlier_low,
         })
 
-    return results, group_mean, group_std
+    return results, group_median, mad
 
 
 # ──────────────────────────────────────────────
@@ -210,26 +214,31 @@ def analyze_period(micro_path, output_dir, patient, period,
             all_freqs.append(freqs)
             all_psds.append(psd)
 
-        results, group_mean, group_std = find_outlier_channels(channel_data, threshold_std)
+        results, group_median, mad = find_outlier_channels(channel_data, threshold_std)
 
         outlier_channels = []
+        outlier_low_channels = []
         clean_channels = []
 
         for r in results:
             ch = r['channel']
-            dev = r['deviation_std']
-            status = "OUTLIER" if r['is_outlier'] else "OK"
+            dev = r['deviation_mads']
+
+            if r['is_outlier']:
+                status = "HIGH"
+                outlier_channels.append(ch)
+            elif r['is_outlier_low']:
+                status = "LOW"
+                outlier_low_channels.append(ch)
+            else:
+                status = "OK"
+                clean_channels.append(ch)
 
             harm_str = ", ".join(
                 f"{freq}Hz: {power:.2e}"
                 for freq, power in sorted(r['harm_powers'].items())
             )
-            print(f"      ch{ch}: {status} ({dev:+.1f} STDs)  total={r['total_noise']:.2e}  [{harm_str}]")
-
-            if r['is_outlier']:
-                outlier_channels.append(ch)
-            else:
-                clean_channels.append(ch)
+            print(f"      ch{ch}: {status} ({dev:+.1f} MADs)  total={r['total_noise']:.2e}  [{harm_str}]")
 
             # Build CSV row for every channel
             csv_rows.append({
@@ -239,26 +248,30 @@ def analyze_period(micro_path, output_dir, patient, period,
                 'side': side_label,
                 'channel': ch,
                 'total_noise': r['total_noise'],
-                'group_mean': group_mean,
-                'group_std': group_std,
-                'deviation_std': dev,
+                'group_median': group_median,
+                'mad': mad,
+                'deviation_mads': dev,
                 'is_outlier': r['is_outlier'],
+                'is_outlier_low': r['is_outlier_low'],
                 **{f'harm_{freq}Hz': r['harm_powers'].get(freq, 0.0) for freq in HARMONICS},
             })
 
-        print(f"      Group mean: {group_mean:.2e}, STD: {group_std:.2e}")
+        print(f"      Group median: {group_median:.2e}, MAD: {mad:.2e}")
         if outlier_channels:
-            print(f"      ** Outliers: ch{outlier_channels}")
-        else:
+            print(f"      ** High outliers: ch{outlier_channels}")
+        if outlier_low_channels:
+            print(f"      ** Low outliers:  ch{outlier_low_channels}")
+        if not outlier_channels and not outlier_low_channels:
             print(f"      All channels within normal range")
 
         summary[group_key] = {
             'results': results,
             'outlier_channels': outlier_channels,
+            'outlier_low_channels': outlier_low_channels,
             'clean_channels': clean_channels,
             'total': len(channel_files),
-            'group_mean': group_mean,
-            'group_std': group_std,
+            'group_median': group_median,
+            'mad': mad,
         }
 
         if save_plots:
@@ -278,7 +291,7 @@ def analyze_period(micro_path, output_dir, patient, period,
             )
 
             plot_noise_bar(
-                results, group_mean, group_std, threshold_std,
+                results, group_median, mad, threshold_std,
                 title=f'{patient} {period} {group_key} — Harmonic Noise per Channel',
                 output_path=os.path.join(output_dir, f'{group_key}_noise_bars.png')
             )
@@ -364,7 +377,7 @@ def plot_psd_overlay(all_freqs, all_psds, all_labels, all_outlier, title, output
     print(f"      -> Overlay: {output_path}")
 
 
-def plot_noise_bar(results, group_mean, group_std, threshold_std, title, output_path):
+def plot_noise_bar(results, group_median, mad, threshold_mads, title, output_path):
     channels = [f'ch{r["channel"]}' for r in results]
     totals = [r['total_noise'] for r in results]
     outliers = [r['is_outlier'] for r in results]
@@ -373,11 +386,11 @@ def plot_noise_bar(results, group_mean, group_std, threshold_std, title, output_
     fig, ax = plt.subplots(figsize=(max(8, len(channels) * 0.8), 5))
     ax.bar(channels, totals, color=colors, alpha=0.8)
 
-    thresh_val = group_mean + threshold_std * group_std
+    thresh_val = group_median + threshold_mads * mad
     ax.axhline(thresh_val, color='red', linestyle='--', linewidth=1,
-               label=f'Outlier threshold ({threshold_std} STDs)')
-    ax.axhline(group_mean, color='gray', linestyle='-', linewidth=1,
-               label='Group mean')
+               label=f'Outlier threshold ({threshold_mads} MADs)')
+    ax.axhline(group_median, color='gray', linestyle='-', linewidth=1,
+               label='Group median')
 
     ax.set_ylabel('Total Harmonic Noise Power')
     ax.set_title(title, fontweight='bold')
@@ -397,56 +410,59 @@ def write_summary(summary, output_dir):
     txt_path = os.path.join(output_dir, 'channel_quality_summary.txt')
 
     with open(txt_path, 'w', encoding='utf-8') as f:
-        f.write("Channel Quality Report — Outlier Detection (Relative Comparison)\n")
-        f.write(f"Outlier threshold: {OUTLIER_THRESH} STDs above group mean\n")
+        f.write("Channel Quality Report — Outlier Detection (Median + MAD)\n")
+        f.write(f"Outlier threshold: ±{OUTLIER_THRESH} MADs from group median\n")
         f.write(f"Harmonics checked: {HARMONICS}\n")
         f.write("=" * 60 + "\n\n")
 
         for group_key, info in sorted(summary.items()):
-            outliers = info['outlier_channels']
+            outliers_high = info['outlier_channels']
+            outliers_low = info['outlier_low_channels']
             clean = info['clean_channels']
             total = info['total']
-            gm = info['group_mean']
-            gs = info['group_std']
+            gm = info['group_median']
+            m = info['mad']
 
-            f.write(f"{group_key}: {len(outliers)}/{total} channels are outliers\n")
-            f.write(f"  Group mean noise: {gm:.2e},  STD: {gs:.2e}\n")
+            f.write(f"{group_key}: {len(outliers_high)} high, {len(outliers_low)} low / {total} channels\n")
+            f.write(f"  Group median noise: {gm:.2e},  MAD: {m:.2e}\n")
 
-            if outliers:
-                f.write(f"  OUTLIER channels: {outliers}\n")
-                f.write(f"  CLEAN channels:   {clean}\n")
-            else:
-                f.write(f"  All channels similar — no outliers\n")
+            if outliers_high:
+                f.write(f"  HIGH outliers: {outliers_high}\n")
+            if outliers_low:
+                f.write(f"  LOW outliers:  {outliers_low}\n")
+            if not outliers_high and not outliers_low:
+                f.write(f"  All channels within normal range\n")
 
             f.write("\n  Per-channel breakdown:\n")
             for r in info['results']:
                 ch = r['channel']
-                status = "OUTLIER" if r['is_outlier'] else "OK    "
-                dev = r['deviation_std']
+                if r['is_outlier']:
+                    status = "HIGH  "
+                elif r['is_outlier_low']:
+                    status = "LOW   "
+                else:
+                    status = "OK    "
+                dev = r['deviation_mads']
                 total_n = r['total_noise']
-                f.write(f"    ch{ch}: {status}  {dev:+.1f} STDs  total={total_n:.2e}\n")
+                f.write(f"    ch{ch}: {status}  {dev:+.1f} MADs  total={total_n:.2e}\n")
             f.write("\n")
 
     print(f"      -> Summary: {txt_path}")
 
 
 # ──────────────────────────────────────────────
-# Master CSV (all patients, all periods)
+# Master CSVs (high and low outliers, separate files)
 # ──────────────────────────────────────────────
 
-def write_master_csv(all_rows, output_path):
-    """
-    Write a CSV containing ONLY the outlier channels that should be removed.
-    """
-    outlier_rows = [r for r in all_rows if r['is_outlier']]
-
-    if not outlier_rows:
-        print(f"\nNo outlier channels found — no CSV written.")
+def _write_csv(rows, output_path, label):
+    """Helper to write a CSV from a list of row dicts."""
+    if not rows:
+        print(f"\nNo {label} channels found — no CSV written.")
         return
 
     fieldnames = [
         'patient', 'period', 'region', 'side', 'channel',
-        'total_noise', 'group_mean', 'group_std', 'deviation_std',
+        'total_noise', 'group_median', 'mad', 'deviation_mads',
     ]
     for freq in HARMONICS:
         fieldnames.append(f'harm_{freq}Hz')
@@ -456,11 +472,28 @@ def write_master_csv(all_rows, output_path):
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
-        for row in outlier_rows:
+        for row in rows:
             writer.writerow(row)
 
-    print(f"\nMaster CSV: {output_path}")
-    print(f"  {len(outlier_rows)} outlier channels to remove")
+    print(f"\n{label} CSV: {output_path}")
+    print(f"  {len(rows)} channels")
+
+
+def write_master_csvs(all_rows, output_dir):
+    """Write two CSVs: one for high outliers, one for low outliers."""
+    high_rows = [r for r in all_rows if r['is_outlier']]
+    low_rows = [r for r in all_rows if r['is_outlier_low']]
+
+    _write_csv(
+        high_rows,
+        os.path.join(output_dir, 'channels_to_remove_HIGH.csv'),
+        'High outlier'
+    )
+    _write_csv(
+        low_rows,
+        os.path.join(output_dir, 'channels_to_remove_LOW.csv'),
+        'Low outlier'
+    )
 
 
 # ──────────────────────────────────────────────
@@ -473,7 +506,7 @@ def main():
         print("  Drive scan:  python psd_remove.py <drive_root> <output_root> [--threshold=2.0]")
         print("  One folder:  python psd_remove.py --folder <mat_folder> <output_folder> [--threshold=2.0]")
         print()
-        print(f"  --threshold : STDs above group mean to flag (default: {OUTLIER_THRESH})")
+        print(f"  --threshold : MADs above group median to flag (default: {OUTLIER_THRESH})")
         sys.exit(1)
 
     threshold_std = OUTLIER_THRESH
@@ -497,7 +530,7 @@ def main():
             sys.exit(1)
 
         print(f"Analyzing folder: {mat_folder}")
-        print(f"Outlier threshold: {threshold_std} STDs\n")
+        print(f"Outlier threshold: ±{threshold_std} MADs\n")
 
         summary, csv_rows = analyze_period(
             mat_folder, output_folder,
@@ -505,8 +538,7 @@ def main():
             threshold_std=threshold_std
         )
 
-        master_csv_path = os.path.join(output_folder, 'channels_to_remove.csv')
-        write_master_csv(csv_rows, master_csv_path)
+        write_master_csvs(csv_rows, output_folder)
         print("Done!")
         return
 
@@ -519,7 +551,7 @@ def main():
         sys.exit(1)
 
     print(f"Scanning {drive_root} ...")
-    print(f"Outlier threshold: {threshold_std} STDs\n")
+    print(f"Outlier threshold: ±{threshold_std} MADs\n")
     discoveries = discover_drive(drive_root)
 
     if not discoveries:
@@ -549,13 +581,12 @@ def main():
         )
         all_csv_rows.extend(csv_rows)
 
-        total_outliers = sum(len(v['outlier_channels']) for v in summary.values())
+        total_high = sum(len(v['outlier_channels']) for v in summary.values())
+        total_low = sum(len(v['outlier_low_channels']) for v in summary.values())
         total_ch = sum(v['total'] for v in summary.values())
-        print(f"    => {total_outliers}/{total_ch} outliers\n")
+        print(f"    => {total_high} high, {total_low} low / {total_ch} channels\n")
 
-    # Write master CSV with ALL channels from ALL patients
-    master_csv_path = os.path.join(output_root, 'channels_to_remove.csv')
-    write_master_csv(all_csv_rows, master_csv_path)
+    write_master_csvs(all_csv_rows, output_root)
 
     print("\nDone!")
 
