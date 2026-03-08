@@ -4,5 +4,6 @@
 # Track only these files
 !.gitignore
 !fastProxyV2.py
+!fastProxyV3.py
 !plot.py
 !README.md
