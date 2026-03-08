@@ -1,0 +1,7 @@
+# Ignore everything by default
+*
+
+# Track only these files
+!.gitignore
+!fastProxyV2.py
+!plot.py
