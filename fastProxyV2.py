@@ -5,16 +5,21 @@ import sys
 from collections import defaultdict
 import h5py
 from scipy.signal import butter, lfilter, lfilter_zi
+import matplotlib.pyplot as plt
+
+#HP (per bin causal), NEO (k=1), bin size 20 ms
+
+HIGHPASS_CUTOFF = 700       # Hz
+HIGHPASS_ORDER  = 3
+NEO_K           = 1
+BIN_MS          = 20        # ms per bin
 
 
 # ──────────────────────────────────────────────
 # Core DSP functions (bin-by-bin, causal)
 # ──────────────────────────────────────────────
-# Emulates a real-time closed-loop system that receives
-# 20ms packets of data and must produce one output value
-# per packet: highpass -> NEO (k=1) -> mean.
 
-def make_highpass(fs, cutoff=350, order=3):
+def make_highpass(fs, cutoff=HIGHPASS_CUTOFF, order=HIGHPASS_ORDER):
     """Create highpass filter coefficients and initial state."""
     nyq = fs / 2
     b, a = butter(order, cutoff / nyq, btype='high')
@@ -22,13 +27,13 @@ def make_highpass(fs, cutoff=350, order=3):
     return b, a, zi
 
 
-def process_single_file(filepath, cutoff=350, k=1, bin_ms=20):
+def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS):
     """
     Run the full pipeline on one .mat file (v7.3 HDF5), bin-by-bin.
 
-    For each 20ms bin:
+    For each bin:
       1. Causal highpass filter (state carries across bins)
-      2. NEO with k=1 (independent per bin, loses k samples at each edge)
+      2. NEO with k (independent per bin, loses k samples at each edge)
       3. Mean of the NEO output for that bin
 
     Returns (array of per-bin means, fs).
@@ -60,26 +65,17 @@ def process_single_file(filepath, cutoff=350, k=1, bin_ms=20):
 
     # --- Filter setup ---
     b, a, zi = make_highpass(fs, cutoff=cutoff)
-    zi = zi * signal[0]  # scale to reduce startup transient
-
-    # --- NEO has no overlap between bins ---
-    # Each bin is independent. NEO with k=1 loses the first and last
-    # sample of each bin (no context carried across bins).
+    zi = zi * signal[0]
 
     bin_means = np.zeros(n_bins)
 
     for i in range(n_bins):
-        # 1. Extract this bin's raw samples
         chunk = signal[i * bin_size : (i + 1) * bin_size]
-
-        # 2. Causal highpass filter (state persists)
         filtered, zi = lfilter(b, a, chunk, zi=zi)
 
-        # 3. NEO on this bin only (loses k samples at each edge)
         x = filtered
         neo_out = x[k:-k] ** 2 - x[:-2*k] * x[2*k:]
 
-        # 4. Mean of this bin's NEO output
         if len(neo_out) > 0:
             bin_means[i] = np.mean(neo_out)
         else:
@@ -93,12 +89,8 @@ def process_single_file(filepath, cutoff=350, k=1, bin_ms=20):
 # ──────────────────────────────────────────────
 
 def parse_filename(filename):
-    """
-    Parse filenames like 'microVIM_L_1.mat'
-    Returns (region, side, channel) e.g. ('VIM', 'L', 1)
-    """
     name = os.path.splitext(filename)[0]
-    match = re.match(r'^micro([A-Za-z]+)_([LR])_(\d+)$', name)
+    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)$', name)
     if not match:
         return None
     region, side, channel = match.groups()
@@ -106,10 +98,6 @@ def parse_filename(filename):
 
 
 def discover_and_group(folder):
-    """
-    Find all .mat files in folder and group by (region, side).
-    Returns dict: (region, side) -> sorted list of (channel, filepath)
-    """
     groups = defaultdict(list)
     for fname in os.listdir(folder):
         if not fname.lower().endswith('.mat'):
@@ -131,10 +119,8 @@ def discover_and_group(folder):
 # CSV output
 # ──────────────────────────────────────────────
 
-def build_csv(group_key, channel_files, output_dir, cutoff=350, k=1, bin_ms=20):
-    """
-    Process all channels for one (region, side) group and write a CSV.
-    """
+def build_csv(group_key, channel_files, output_dir,
+              cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS):
     region, side = group_key
     side_label = 'Left' if side == 'L' else 'Right'
     print(f"\nProcessing {region} {side_label} ({len(channel_files)} channels)...")
@@ -150,30 +136,22 @@ def build_csv(group_key, channel_files, output_dir, cutoff=350, k=1, bin_ms=20):
         channels.append(channel)
         fs_val = fs
 
-    # Trim all to the shortest length
     min_len = min(len(b) for b in all_binned)
     all_binned = [b[:min_len] for b in all_binned]
 
-    # Stack into (n_bins, n_channels) array
     matrix = np.column_stack(all_binned)
-
-    # Time column in seconds
     time_s = np.arange(min_len) * (bin_ms / 1000.0)
-
-    # Median across channels at each time bin
     median_proxy = np.median(matrix, axis=1)
 
-    # Build header
     header_parts = ['time_s']
     for ch in channels:
         header_parts.append(f'ch{ch}')
     header_parts.append(f'{region}_{side}_median_proxy')
     header = ','.join(header_parts)
 
-    # Combine all columns
     out_data = np.column_stack([time_s, matrix, median_proxy])
 
-    # Write CSV
+    os.makedirs(output_dir, exist_ok=True)
     csv_name = f'micro{region}_{side}_neo_binned.csv'
     csv_path = os.path.join(output_dir, csv_name)
     np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
@@ -183,30 +161,20 @@ def build_csv(group_key, channel_files, output_dir, cutoff=350, k=1, bin_ms=20):
     return csv_path
 
 
-import matplotlib.pyplot as plt
-
-
 # ──────────────────────────────────────────────
 # Plotting
 # ──────────────────────────────────────────────
 
 def plot_median_proxy(csv_path, t_start=0, t_end=100):
-    """
-    Plot the median proxy column from a CSV over a given time range.
-    Saves a .png next to the CSV.
-    """
-    # Load CSV, first row is header
     with open(csv_path, 'r') as f:
         header = f.readline().strip().split(',')
 
     data = np.loadtxt(csv_path, delimiter=',', skiprows=1)
     time_s = data[:, 0]
 
-    # Find the median proxy column (last column, name ends with _median_proxy)
     proxy_col = -1
     proxy_label = header[proxy_col]
 
-    # Mask to the requested time range
     mask = (time_s >= t_start) & (time_s <= t_end)
     t = time_s[mask]
     y = data[mask, proxy_col]
@@ -232,9 +200,6 @@ def plot_median_proxy(csv_path, t_start=0, t_end=100):
 def main():
     if len(sys.argv) < 2:
         print("Usage: python neo_pipeline.py <input_folder> [output_folder] [--plot]")
-        print("  input_folder : path to folder with .mat files")
-        print("  output_folder: (optional) where to save CSVs, defaults to input_folder")
-        print("  --plot       : also plot the median proxy (0-100s) for each group")
         sys.exit(1)
 
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -249,7 +214,9 @@ def main():
 
     os.makedirs(output_folder, exist_ok=True)
 
-    # Discover and group files
+    print(f"Config: cutoff={HIGHPASS_CUTOFF}Hz, order={HIGHPASS_ORDER}, "
+          f"k={NEO_K}, bin={BIN_MS}ms\n")
+
     groups = discover_and_group(input_folder)
 
     if not groups:
@@ -262,7 +229,6 @@ def main():
         side_label = 'Left' if side == 'L' else 'Right'
         print(f"  {region} {side_label}: channels {[ch for ch, _ in files]}")
 
-    # Process each group
     csv_paths = []
     for group_key, channel_files in groups.items():
         path = build_csv(group_key, channel_files, output_folder)
@@ -270,7 +236,6 @@ def main():
 
     print(f"\nDone! {len(csv_paths)} CSV(s) created.")
 
-    # Plot if requested
     if do_plot:
         for csv_path in csv_paths:
             plot_median_proxy(csv_path, t_start=0, t_end=150)

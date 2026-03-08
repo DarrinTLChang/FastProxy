@@ -43,3 +43,24 @@ python fastProxyV2.py ./patient_data_raw ./output --plot
 ```
 
 This reads all `micro*_L_*.mat` and `micro*_R_*.mat` from `patient_data_raw`, writes `micro{region}_{side}_neo_binned.csv` into `output`, and generates plot PNGs when `--plot` is used.
+
+RMS:
+
+Square each sample, sum, divide, sqrt
+~2 operations per sample + 1 sqrt + 1 divide
+480 samples → 920 operations ( n samples * 2 + 2)
+
+
+New pipeline (biquad + NEO + mean per channel):
+
+Biquad: 5 ops/sample
+NEO: 3 ops/sample
+Mean: 1 op/sample
+480 samples → ~4,320 operations (n samples * 9)
+
+biquad 4-5 times slower, RMS = 24micro s
+
+20ms at 24000 sampling rate = 480 samples
+
+5.6 ms at 24000 sampling rate = 134
+
