@@ -1,4 +1,4 @@
-# fastProxyV2
+# fastProxyV_ (USE NEWEST VER)
 
 A **real-time-style fast proxy pipeline** for recordings. It treats the signal as a stream of **20 ms packets**, runs a **causal** highpass → NEO → mean on each packet, and outputs one proxy value per packet. Outputs are written as one CSV per (region, side) with per-channel and median proxy columns.
 
