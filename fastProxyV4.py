@@ -5,32 +5,17 @@ import sys
 from collections import defaultdict
 import h5py
 import matplotlib.pyplot as plt
+import math
 
 #does the hp by hand
 
-
-# ══════════════════════════════════════════════
-# GLOBAL CONFIG — change these once here
-# ══════════════════════════════════════════════
 HIGHPASS_CUTOFF = 350       # Hz
 NEO_K           = 1
-BIN_MS          = 5.6        # ms per bin
+num_samples = 128
+BIN_MS = math.ceil((num_samples * 1000 / 24414.0625) * 10) / 10 #ms per bin
+# BIN_MS          = 5.6        # ms per bin
 
 
-# ──────────────────────────────────────────────
-# Biquad IIR Highpass Filter (no scipy needed at runtime)
-# ──────────────────────────────────────────────
-#
-# A single biquad (order=2) implements:
-#   y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
-#
-# Cost: 5 multiplies + 4 adds per sample
-# State: 4 values (x[n-1], x[n-2], y[n-1], y[n-2])
-#
-# For higher orders, cascade multiple biquads in series.
-# Order 2 = 1 biquad  (12 dB/oct)
-# Order 4 = 2 biquads (24 dB/oct)
-# Order 6 = 3 biquads (36 dB/oct)
 
 def compute_biquad_highpass_coeffs(fs, cutoff):
     """
@@ -41,16 +26,12 @@ def compute_biquad_highpass_coeffs(fs, cutoff):
 
     Returns (b0, b1, b2, a1, a2) with a0 normalized to 1.
     """
-    # Prewarp the cutoff frequency
     wc = 2 * np.pi * cutoff
     T = 1 / fs
     wc_warped = (2 / T) * np.tan(wc * T / 2)
 
-    # Second-order Butterworth analog prototype: s^2 + sqrt(2)*s + 1
-    # Bilinear transform substitution: s = (2/T)*(z-1)/(z+1)
-    K = wc_warped * T / 2
 
-    # Denominator: K^2 + sqrt(2)*K + 1
+    K = wc_warped * T / 2
     denom = K**2 + np.sqrt(2) * K + 1
 
     b0 = 1.0 / denom
@@ -144,23 +125,9 @@ class CascadedHighpass:
             out = s.process_chunk(out)
         return out
 
-
-# ──────────────────────────────────────────────
-# Pipeline
-# ──────────────────────────────────────────────
-
 def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS,
                         filter_order=2):
-    """
-    Run the full pipeline on one .mat file (v7.3 HDF5), bin-by-bin.
 
-    For each bin:
-      1. Biquad highpass filter (state carries across bins)
-      2. NEO with k (independent per bin, loses k samples at each edge)
-      3. Mean of the NEO output for that bin
-
-    Returns (array of per-bin means, fs).
-    """
     signal = None
     fs = None
 
@@ -186,7 +153,6 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS
     bin_size = int(fs * bin_ms / 1000)
     n_bins = len(signal) // bin_size
 
-    # --- Filter setup ---
     hp = CascadedHighpass(fs, cutoff, order=filter_order)
 
     bin_means = np.zeros(n_bins)
@@ -194,10 +160,8 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS
     for i in range(n_bins):
         chunk = signal[i * bin_size : (i + 1) * bin_size]
 
-        # Biquad highpass (state persists across bins automatically)
         filtered = hp.process_chunk(chunk)
 
-        # NEO on this bin only
         x = filtered
         neo_out = x[k:-k] ** 2 - x[:-2*k] * x[2*k:]
 
@@ -209,9 +173,6 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS
     return bin_means, fs
 
 
-# ──────────────────────────────────────────────
-# File discovery & grouping
-# ──────────────────────────────────────────────
 
 def parse_filename(filename):
     name = os.path.splitext(filename)[0]
@@ -238,11 +199,6 @@ def discover_and_group(folder):
         groups[key].sort(key=lambda x: x[0])
 
     return groups
-
-
-# ──────────────────────────────────────────────
-# CSV output
-# ──────────────────────────────────────────────
 
 def build_csv(group_key, channel_files, output_dir,
               cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS, filter_order=2):
@@ -287,9 +243,6 @@ def build_csv(group_key, channel_files, output_dir,
     return csv_path
 
 
-# ──────────────────────────────────────────────
-# Plotting
-# ──────────────────────────────────────────────
 
 def plot_median_proxy(csv_path, t_start=0, t_end=100):
     with open(csv_path, 'r') as f:
@@ -319,9 +272,6 @@ def plot_median_proxy(csv_path, t_start=0, t_end=100):
     plt.close(fig)
 
 
-# ──────────────────────────────────────────────
-# Print coefficients (for hardcoding on hardware)
-# ──────────────────────────────────────────────
 
 def print_coefficients(fs, cutoff, order=2):
     """Print the biquad coefficients you'd hardcode on your device."""
@@ -344,9 +294,6 @@ def print_coefficients(fs, cutoff, order=2):
     print()
 
 
-# ──────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────
 
 def main():
     if len(sys.argv) < 2:
@@ -356,7 +303,6 @@ def main():
         print("  --coeffs   : print hardcoded biquad coefficients and exit")
         sys.exit(1)
 
-    # Parse flags
     filter_order = 2
     for a in sys.argv[1:]:
         if a.startswith('--order='):
@@ -366,9 +312,7 @@ def main():
     do_plot = '--plot' in sys.argv
     do_coeffs = '--coeffs' in sys.argv
 
-    # Coeffs-only mode: just print and exit
     if do_coeffs:
-        # Need fs — use a dummy or load from first file
         if args:
             input_folder = args[0]
             if os.path.isdir(input_folder):
