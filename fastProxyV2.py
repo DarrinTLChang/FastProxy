@@ -9,10 +9,10 @@ import matplotlib.pyplot as plt
 
 #HP (per bin causal), NEO (k=1), bin size 20 ms
 
-HIGHPASS_CUTOFF = 700       # Hz
-HIGHPASS_ORDER  = 3
+HIGHPASS_CUTOFF = 350       # Hz
+HIGHPASS_ORDER  = 2
 NEO_K           = 1
-BIN_MS          = 20        # ms per bin
+NUM_SAMPLES     = 128        # samples per bin (the real-time packet size)
 
 
 # ──────────────────────────────────────────────
@@ -27,17 +27,7 @@ def make_highpass(fs, cutoff=HIGHPASS_CUTOFF, order=HIGHPASS_ORDER):
     return b, a, zi
 
 
-def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS):
-    """
-    Run the full pipeline on one .mat file (v7.3 HDF5), bin-by-bin.
-
-    For each bin:
-      1. Causal highpass filter (state carries across bins)
-      2. NEO with k (independent per bin, loses k samples at each edge)
-      3. Mean of the NEO output for that bin
-
-    Returns (array of per-bin means, fs).
-    """
+def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, num_samples=NUM_SAMPLES):
     signal = None
     fs = None
 
@@ -60,10 +50,9 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS
             f"Keys found: {shapes}"
         )
 
-    bin_size = int(fs * bin_ms / 1000)
+    bin_size = num_samples
     n_bins = len(signal) // bin_size
 
-    # --- Filter setup ---
     b, a, zi = make_highpass(fs, cutoff=cutoff)
     zi = zi * signal[0]
 
@@ -89,8 +78,16 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS
 # ──────────────────────────────────────────────
 
 def parse_filename(filename):
+    """
+    Parse filenames like:
+      - microVIM_L_9.mat
+      - microVIM_L_9_CommonFiltered.mat
+
+    The optional '_CommonFiltered' suffix is ignored so both map
+    to the same (region, side, channel).
+    """
     name = os.path.splitext(filename)[0]
-    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)$', name)
+    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)(?:_CommonFiltered)?$', name)
     if not match:
         return None
     region, side, channel = match.groups()
@@ -116,11 +113,11 @@ def discover_and_group(folder):
 
 
 # ──────────────────────────────────────────────
-# CSV output
+# CSV output (per region)
 # ──────────────────────────────────────────────
 
 def build_csv(group_key, channel_files, output_dir,
-              cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS):
+              cutoff=HIGHPASS_CUTOFF, k=NEO_K, num_samples=NUM_SAMPLES):
     region, side = group_key
     side_label = 'Left' if side == 'L' else 'Right'
     print(f"\nProcessing {region} {side_label} ({len(channel_files)} channels)...")
@@ -131,7 +128,7 @@ def build_csv(group_key, channel_files, output_dir,
 
     for channel, filepath in channel_files:
         print(f"  Channel {channel}: {os.path.basename(filepath)}")
-        binned, fs = process_single_file(filepath, cutoff=cutoff, k=k, bin_ms=bin_ms)
+        binned, fs = process_single_file(filepath, cutoff=cutoff, k=k, num_samples=num_samples)
         all_binned.append(binned)
         channels.append(channel)
         fs_val = fs
@@ -140,7 +137,8 @@ def build_csv(group_key, channel_files, output_dir,
     all_binned = [b[:min_len] for b in all_binned]
 
     matrix = np.column_stack(all_binned)
-    time_s = np.arange(min_len) * (bin_ms / 1000.0)
+    bin_duration_s = num_samples / fs_val
+    time_s = np.arange(min_len) * bin_duration_s
     median_proxy = np.median(matrix, axis=1)
 
     header_parts = ['time_s']
@@ -155,8 +153,67 @@ def build_csv(group_key, channel_files, output_dir,
     csv_name = f'micro{region}_{side}_neo_binned.csv'
     csv_path = os.path.join(output_dir, csv_name)
     np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
+    bin_ms = num_samples / fs_val * 1000
     print(f"  -> Saved: {csv_path}")
-    print(f"     {min_len} bins, {len(channels)} channels, fs={fs_val} Hz")
+    print(f"     {min_len} bins, {len(channels)} channels, fs={fs_val} Hz, {bin_ms:.2f} ms/bin")
+
+    return csv_path, all_binned, channels, fs_val
+
+
+# ──────────────────────────────────────────────
+# Hemisphere CSV output
+# ──────────────────────────────────────────────
+
+def build_hemisphere_csv(hemisphere_bins, output_dir, fs, num_samples=NUM_SAMPLES):
+    """
+    Build a single CSV: time_s, hemisphere_L_median_proxy, hemisphere_R_median_proxy
+    Median across ALL channels on each side.
+    """
+    sides_with_data = [s for s in ['L', 'R'] if hemisphere_bins.get(s)]
+    if not sides_with_data:
+        return None
+
+    side_medians = {}
+    min_len = float('inf')
+
+    for side in sides_with_data:
+        bins = hemisphere_bins[side]
+        side_min = min(len(b) for b in bins)
+        min_len = min(min_len, side_min)
+
+    min_len = int(min_len)
+
+    for side in sides_with_data:
+        bins = hemisphere_bins[side]
+        trimmed = [b[:min_len] for b in bins]
+        matrix = np.column_stack(trimmed)
+        side_medians[side] = np.median(matrix, axis=1)
+
+    bin_duration_s = num_samples / fs
+    time_s = np.arange(min_len) * bin_duration_s
+
+    header_parts = ['time_s']
+    columns = [time_s]
+
+    for side in ['L', 'R']:
+        if side in side_medians:
+            header_parts.append(f'hemisphere_{side}_median_proxy')
+            columns.append(side_medians[side])
+
+    header = ','.join(header_parts)
+    out_data = np.column_stack(columns)
+
+    os.makedirs(output_dir, exist_ok=True)
+    csv_name = 'hemisphere_neo_binned.csv'
+    csv_path = os.path.join(output_dir, csv_name)
+    np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
+
+    for side in sides_with_data:
+        side_label = 'Left' if side == 'L' else 'Right'
+        n_ch = len(hemisphere_bins[side])
+        print(f"\n  Hemisphere {side_label}: {n_ch} channels")
+    print(f"  -> Hemisphere CSV: {csv_path}")
+    print(f"     {min_len} bins, {num_samples / fs * 1000:.2f} ms/bin")
 
     return csv_path
 
@@ -190,7 +247,7 @@ def plot_median_proxy(csv_path, t_start=0, t_end=100):
     png_path = csv_path.replace('.csv', f'_plot_{t_start}-{t_end}s.png')
     fig.savefig(png_path, dpi=150)
     print(f"  -> Plot saved: {png_path}")
-    plt.show()
+    plt.close(fig)
 
 
 # ──────────────────────────────────────────────
@@ -215,7 +272,7 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
 
     print(f"Config: cutoff={HIGHPASS_CUTOFF}Hz, order={HIGHPASS_ORDER}, "
-          f"k={NEO_K}, bin={BIN_MS}ms\n")
+          f"k={NEO_K}, num_samples={NUM_SAMPLES}\n")
 
     groups = discover_and_group(input_folder)
 
@@ -230,9 +287,25 @@ def main():
         print(f"  {region} {side_label}: channels {[ch for ch, _ in files]}")
 
     csv_paths = []
+    hemisphere_bins = {'L': [], 'R': []}
+    fs_val = None
+
     for group_key, channel_files in groups.items():
-        path = build_csv(group_key, channel_files, output_folder)
+        region, side = group_key
+        path, all_binned, channels, fs = build_csv(
+            group_key, channel_files, output_folder
+        )
         csv_paths.append(path)
+        fs_val = fs
+
+        for binned in all_binned:
+            hemisphere_bins[side].append(binned)
+
+    # Build single hemisphere CSV
+    if fs_val:
+        hemi_path = build_hemisphere_csv(hemisphere_bins, output_folder, fs=fs_val)
+        if hemi_path:
+            csv_paths.append(hemi_path)
 
     print(f"\nDone! {len(csv_paths)} CSV(s) created.")
 

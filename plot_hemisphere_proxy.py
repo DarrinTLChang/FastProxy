@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-CSV_PATH = r"C:\Users\Maral\Desktop\Darrin\FastProxy\s523_test_outputs\test523p1\hemisphere_neo_binned.csv"
+CSV_PATH = r"C:\Users\Maral\Desktop\Darrin\FastProxy\s523_test_outputs\order3_raw_128samples_v2\hemisphere_neo_binned.csv"
 
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)

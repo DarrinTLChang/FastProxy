@@ -27,7 +27,7 @@ BLACKLIST_CSVS = {
 
 # Set to True/False to enable/disable each blacklist source
 BLACKLIST_ENABLE = {
-    'amplitude':   True,
+    'amplitude':   False,
     'correlation': False,
     'psd_high':    False,
     'psd_low':     False,

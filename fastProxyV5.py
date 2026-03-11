@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 # ══════════════════════════════════════════════
 # GLOBAL CONFIG — change these once here
 # ══════════════════════════════════════════════
-HIGHPASS_CUTOFF = 700       # Hz
+HIGHPASS_CUTOFF = 350       # Hz
 NEO_K           = 1
 BIN_MS          = 20        # ms per bin
 
