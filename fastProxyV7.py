@@ -19,10 +19,10 @@ NUM_SAMPLES      = 489       # samples per bin (the real-time packet size)
 # BLACKLIST CONFIG — toggle each CSV on/off
 # ══════════════════════════════════════════════
 BLACKLIST_CSVS = {
-    'amplitude':   r"D:\fastProxy_outputs\abnormal_peak\abnormal_amplitude_channels.csv",
+    'amplitude':   r"F:\fastProxy_outputs\abnormal_peak\abnormal_amplitude_channels.csv",
     'correlation': r"F:\fastProxy_outputs\correlation_check\channels_low_correlation.csv",
-    'psd_high':    r"D:\fastProxy_outputs\psd_std3\channels_to_remove_HIGH.csv",
-    'psd_low':     r"F:\fastProxy_outputs\psd_std3\channels_to_remove_LOW.csv",
+    'psd_high':    r"F:\fastProxy_outputs\psd_std3\channels_to_remove_HIGH",
+    'psd_low':     r"F:\fastProxy_outputs\psd_std3\channels_to_remove_LOW",
 }
 
 # Set to True/False to enable/disable each blacklist source
@@ -246,18 +246,8 @@ class CascadedHighpass:
 # Pipeline
 # ──────────────────────────────────────────────
 
-def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
-                        num_samples=NUM_SAMPLES, filter_order=2):
-    """
-    Run the full pipeline on one .mat file (v7.3 HDF5), bin-by-bin.
-
-    For each bin of num_samples:
-      1. Biquad highpass filter (state carries across bins)
-      2. NEO with k=1, using lookback from previous bin (127 values per 128-sample bin)
-      3. Mean of the NEO output for that bin
-
-    Returns (array of per-bin means, fs).
-    """
+def load_signal_from_mat(filepath):
+    """Load signal and fs from a v7.3 HDF5 .mat file."""
     signal = None
     fs = None
 
@@ -280,38 +270,63 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
             f"Keys found: {shapes}"
         )
 
-    bin_size = num_samples
-    n_bins = len(signal) // bin_size
+    return signal, fs
 
-    # --- Filter setup ---
+
+def apply_car_inplace(signals, n_bins, num_samples):
+    """
+    Common Average Reference: for each bin, subtract the mean across channels
+    from every channel. Operates on raw signals before highpass filtering.
+
+    signals: list of 1D arrays (one per channel, all same length or longer)
+    n_bins:  number of bins to process
+    num_samples: samples per bin
+
+    Modifies signals in-place.
+    """
+    n_ch = len(signals)
+    for i in range(n_bins):
+        start = i * num_samples
+        end = start + num_samples
+        # Compute mean across channels for this bin
+        car = np.zeros(num_samples)
+        for c in range(n_ch):
+            car += signals[c][start:end]
+        car /= n_ch
+        # Subtract from each channel
+        for c in range(n_ch):
+            signals[c][start:end] -= car
+
+
+def process_signal(signal, fs, n_bins, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
+                   num_samples=NUM_SAMPLES, filter_order=2):
+    """
+    Run HP -> NEO -> mean per bin on an already-loaded (and CAR'd) signal.
+
+    For each bin of num_samples:
+      1. Biquad highpass filter (state carries across bins)
+      2. NEO with k=1, using lookback from previous bin (N-1 values per N-sample bin)
+      3. Mean of the NEO output for that bin
+
+    Returns 1D array of per-bin means.
+    """
     hp = CascadedHighpass(fs, cutoff, order=filter_order)
-
     bin_means = np.zeros(n_bins)
-    prev = 0.0  # last filtered sample from previous bin
+    prev = 0.0
 
     for i in range(n_bins):
-        chunk = signal[i * bin_size : (i + 1) * bin_size]
-
-        # Biquad highpass (state persists across bins automatically)
+        chunk = signal[i * num_samples : (i + 1) * num_samples]
         filtered = hp.process_chunk(chunk)
 
-        # NEO with lookback across bin boundary
-        # prepend prev so NEO can use f[0] as a center sample
-        # ext = [prev, f[0]..f[N-1]] -> N+1 samples
-        # NEO centered on f[0]..f[N-2] -> N-1 values (f[N-1] needs next bin)
         ext = np.empty(len(filtered) + 1)
         ext[0] = prev
         ext[1:] = filtered
         neo_out = ext[1:-1] ** 2 - ext[:-2] * ext[2:]
 
-        if len(neo_out) > 0:
-            bin_means[i] = np.mean(neo_out)
-        else:
-            bin_means[i] = 0.0
-
+        bin_means[i] = np.mean(neo_out) if len(neo_out) > 0 else 0.0
         prev = filtered[-1]
 
-    return bin_means, fs
+    return bin_means
 
 
 # ──────────────────────────────────────────────
@@ -370,25 +385,35 @@ def build_csv(group_key, channel_files, output_dir, blacklist=None,
 
     print(f"\nProcessing {region} {side_label} ({len(channel_files)} channels)...")
 
-    all_binned = []
+    # Step 1: Load all signals
+    print(f"  Loading signals...")
+    signals = []
     channels = []
     fs_val = None
-
     for channel, filepath in channel_files:
-        print(f"  Channel {channel}: {os.path.basename(filepath)}")
-        binned, fs = process_single_file(filepath, cutoff=cutoff, k=k,
-                                         num_samples=num_samples,
-                                         filter_order=filter_order)
-        all_binned.append(binned)
+        print(f"    ch{channel}: {os.path.basename(filepath)}")
+        signal, fs = load_signal_from_mat(filepath)
+        signals.append(signal)
         channels.append(channel)
         fs_val = fs
 
-    min_len = min(len(b) for b in all_binned)
-    all_binned = [b[:min_len] for b in all_binned]
+    n_bins = min(len(s) // num_samples for s in signals)
+
+    # Step 2: Apply CAR (subtract mean across channels, bin-by-bin, before HP)
+    print(f"  Applying Common Average Reference ({len(signals)} channels)...")
+    apply_car_inplace(signals, n_bins, num_samples)
+
+    # Step 3: HP -> NEO -> mean per channel
+    print(f"  Running HP + NEO...")
+    all_binned = []
+    for i, (channel, signal) in enumerate(zip(channels, signals)):
+        binned = process_signal(signal, fs_val, n_bins, cutoff=cutoff, k=k,
+                                num_samples=num_samples, filter_order=filter_order)
+        all_binned.append(binned)
 
     matrix = np.column_stack(all_binned)
     bin_duration_s = num_samples / fs_val
-    time_s = np.arange(min_len) * bin_duration_s
+    time_s = np.arange(n_bins) * bin_duration_s
     median_proxy = np.median(matrix, axis=1)
 
     header_parts = ['time_s']
@@ -405,7 +430,7 @@ def build_csv(group_key, channel_files, output_dir, blacklist=None,
     np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
     bin_ms = num_samples / fs_val * 1000
     print(f"  -> Saved: {csv_path}")
-    print(f"     {min_len} bins, {len(channels)} channels, fs={fs_val} Hz, {bin_ms:.2f} ms/bin")
+    print(f"     {n_bins} bins, {len(channels)} channels, fs={fs_val} Hz, {bin_ms:.2f} ms/bin")
 
     return csv_path, all_binned, channels, fs_val
 
