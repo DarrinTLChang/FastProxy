@@ -12,94 +12,52 @@ import matplotlib.pyplot as plt
 # ══════════════════════════════════════════════
 HIGHPASS_CUTOFF = 350       # Hz
 NEO_K           = 1
-BIN_MS          = 20        # ms per bin
+NUM_SAMPLES     = 128       # samples per bin (the real-time packet size)
 
 
 # ──────────────────────────────────────────────
 # Biquad IIR Highpass Filter (no scipy needed at runtime)
 # ──────────────────────────────────────────────
-#
-# A single biquad (order=2) implements:
-#   y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
-#
-# Cost: 5 multiplies + 4 adds per sample
-# State: 4 values (x[n-1], x[n-2], y[n-1], y[n-2])
-#
-# For higher orders, cascade multiple biquads in series.
-# Order 2 = 1 biquad  (12 dB/oct)
-# Order 4 = 2 biquads (24 dB/oct)
-# Order 6 = 3 biquads (36 dB/oct)
 
 def compute_biquad_highpass_coeffs(fs, cutoff):
-    """
-    Compute biquad highpass coefficients using the bilinear transform.
-    This is what scipy.signal.butter(2, ..., btype='high') computes.
-
-    On real hardware you'd precompute these once and hardcode them.
-
-    Returns (b0, b1, b2, a1, a2) with a0 normalized to 1.
-    """
-    # Prewarp the cutoff frequency
     wc = 2 * np.pi * cutoff
     T = 1 / fs
     wc_warped = (2 / T) * np.tan(wc * T / 2)
-
-    # Second-order Butterworth analog prototype: s^2 + sqrt(2)*s + 1
-    # Bilinear transform substitution: s = (2/T)*(z-1)/(z+1)
     K = wc_warped * T / 2
-
-    # Denominator: K^2 + sqrt(2)*K + 1
     denom = K**2 + np.sqrt(2) * K + 1
-
     b0 = 1.0 / denom
     b1 = -2.0 / denom
     b2 = 1.0 / denom
-
     a1 = (2 * K**2 - 2) / denom
     a2 = (K**2 - np.sqrt(2) * K + 1) / denom
-
     return b0, b1, b2, a1, a2
 
 
 class BiquadHighpass:
-    """
-    A single biquad highpass filter section.
-    Cascade multiple instances for higher orders.
-
-    Per-sample cost: 5 multiplies, 4 adds.
-    Memory: 4 floats (x1, x2, y1, y2).
-    """
-
     def __init__(self, fs, cutoff):
         self.b0, self.b1, self.b2, self.a1, self.a2 = \
             compute_biquad_highpass_coeffs(fs, cutoff)
-        # State
-        self.x1 = 0.0   # x[n-1]
-        self.x2 = 0.0   # x[n-2]
-        self.y1 = 0.0   # y[n-1]
-        self.y2 = 0.0   # y[n-2]
+        self.x1 = 0.0
+        self.x2 = 0.0
+        self.y1 = 0.0
+        self.y2 = 0.0
 
     def reset(self):
         self.x1 = self.x2 = self.y1 = self.y2 = 0.0
 
     def process_sample(self, x):
-        """Filter one sample. This is the hot loop on hardware."""
         y = (self.b0 * x
              + self.b1 * self.x1
              + self.b2 * self.x2
              - self.a1 * self.y1
              - self.a2 * self.y2)
-
-        # Shift state
         self.x2 = self.x1
         self.x1 = x
         self.y2 = self.y1
         self.y1 = y
-
         return y
 
     def process_chunk(self, chunk):
-        """Filter a numpy array of samples. Used for simulation."""
         out = np.empty(len(chunk))
         for n in range(len(chunk)):
             out[n] = self.process_sample(chunk[n])
@@ -107,16 +65,6 @@ class BiquadHighpass:
 
 
 class CascadedHighpass:
-    """
-    Cascade multiple biquad sections for higher-order filtering.
-
-    Order 2 = 1 biquad  (12 dB/oct)  — 5 mult/sample
-    Order 4 = 2 biquads (24 dB/oct)  — 10 mult/sample
-    Order 6 = 3 biquads (36 dB/oct)  — 15 mult/sample
-
-    Only even orders supported (each biquad = order 2).
-    """
-
     def __init__(self, fs, cutoff, order=2):
         if order % 2 != 0:
             raise ValueError("Biquad cascade requires even order (2, 4, 6, ...)")
@@ -129,14 +77,12 @@ class CascadedHighpass:
             s.reset()
 
     def process_sample(self, x):
-        """Pass one sample through all biquad sections in series."""
         y = x
         for s in self.sections:
             y = s.process_sample(y)
         return y
 
     def process_chunk(self, chunk):
-        """Filter a numpy array through the cascade."""
         out = chunk.copy()
         for s in self.sections:
             out = s.process_chunk(out)
@@ -147,18 +93,8 @@ class CascadedHighpass:
 # Pipeline
 # ──────────────────────────────────────────────
 
-def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS,
-                        filter_order=2):
-    """
-    Run the full pipeline on one .mat file (v7.3 HDF5), bin-by-bin.
-
-    For each bin:
-      1. Biquad highpass filter (state carries across bins)
-      2. NEO with k (independent per bin, loses k samples at each edge)
-      3. Mean of the NEO output for that bin
-
-    Returns (array of per-bin means, fs).
-    """
+def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
+                        num_samples=NUM_SAMPLES, filter_order=2):
     signal = None
     fs = None
 
@@ -181,21 +117,17 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS
             f"Keys found: {shapes}"
         )
 
-    bin_size = int(fs * bin_ms / 1000)
+    bin_size = num_samples
     n_bins = len(signal) // bin_size
 
-    # --- Filter setup ---
     hp = CascadedHighpass(fs, cutoff, order=filter_order)
 
     bin_means = np.zeros(n_bins)
 
     for i in range(n_bins):
         chunk = signal[i * bin_size : (i + 1) * bin_size]
-
-        # Biquad highpass (state persists across bins automatically)
         filtered = hp.process_chunk(chunk)
 
-        # NEO on this bin only
         x = filtered
         neo_out = x[k:-k] ** 2 - x[:-2*k] * x[2*k:]
 
@@ -243,7 +175,7 @@ def discover_and_group(folder):
 # ──────────────────────────────────────────────
 
 def build_csv(group_key, channel_files, output_dir,
-              cutoff=HIGHPASS_CUTOFF, k=NEO_K, bin_ms=BIN_MS, filter_order=2):
+              cutoff=HIGHPASS_CUTOFF, k=NEO_K, num_samples=NUM_SAMPLES, filter_order=2):
     region, side = group_key
     side_label = 'Left' if side == 'L' else 'Right'
     print(f"\nProcessing {region} {side_label} ({len(channel_files)} channels)...")
@@ -254,7 +186,8 @@ def build_csv(group_key, channel_files, output_dir,
 
     for channel, filepath in channel_files:
         print(f"  Channel {channel}: {os.path.basename(filepath)}")
-        binned, fs = process_single_file(filepath, cutoff=cutoff, k=k, bin_ms=bin_ms,
+        binned, fs = process_single_file(filepath, cutoff=cutoff, k=k,
+                                         num_samples=num_samples,
                                          filter_order=filter_order)
         all_binned.append(binned)
         channels.append(channel)
@@ -264,7 +197,8 @@ def build_csv(group_key, channel_files, output_dir,
     all_binned = [b[:min_len] for b in all_binned]
 
     matrix = np.column_stack(all_binned)
-    time_s = np.arange(min_len) * (bin_ms / 1000.0)
+    bin_duration_s = num_samples / fs_val
+    time_s = np.arange(min_len) * bin_duration_s
     median_proxy = np.median(matrix, axis=1)
 
     header_parts = ['time_s']
@@ -279,30 +213,22 @@ def build_csv(group_key, channel_files, output_dir,
     csv_name = f'micro{region}_{side}_neo_binned.csv'
     csv_path = os.path.join(output_dir, csv_name)
     np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
+    bin_ms = num_samples / fs_val * 1000
     print(f"  -> Saved: {csv_path}")
-    print(f"     {min_len} bins, {len(channels)} channels, fs={fs_val} Hz")
+    print(f"     {min_len} bins, {len(channels)} channels, fs={fs_val} Hz, {bin_ms:.2f} ms/bin")
 
-    # Return per-channel bin arrays for hemisphere computation
-    return csv_path, all_binned, channels
+    return csv_path, all_binned, channels, fs_val
 
 
 # ──────────────────────────────────────────────
 # Hemisphere CSV output
 # ──────────────────────────────────────────────
 
-def build_hemisphere_csv(hemisphere_bins, output_dir, bin_ms=BIN_MS):
-    """
-    Build a single CSV with columns: time_s, hemisphere_L_median_proxy, hemisphere_R_median_proxy
-    Takes the median across ALL channels on each side.
-
-    hemisphere_bins: dict {'L': [list of 1D arrays], 'R': [list of 1D arrays]}
-    """
-    # Find which sides have data
+def build_hemisphere_csv(hemisphere_bins, output_dir, fs, num_samples=NUM_SAMPLES):
     sides_with_data = [s for s in ['L', 'R'] if hemisphere_bins.get(s)]
     if not sides_with_data:
         return None
 
-    # Compute median per side
     side_medians = {}
     min_len = float('inf')
 
@@ -319,15 +245,14 @@ def build_hemisphere_csv(hemisphere_bins, output_dir, bin_ms=BIN_MS):
         matrix = np.column_stack(trimmed)
         side_medians[side] = np.median(matrix, axis=1)
 
-    time_s = np.arange(min_len) * (bin_ms / 1000.0)
+    bin_duration_s = num_samples / fs
+    time_s = np.arange(min_len) * bin_duration_s
 
-    # Build columns: time, L median (if exists), R median (if exists)
     header_parts = ['time_s']
     columns = [time_s]
 
     for side in ['L', 'R']:
         if side in side_medians:
-            side_label = 'Left' if side == 'L' else 'Right'
             header_parts.append(f'hemisphere_{side}_median_proxy')
             columns.append(side_medians[side])
 
@@ -344,7 +269,7 @@ def build_hemisphere_csv(hemisphere_bins, output_dir, bin_ms=BIN_MS):
         n_ch = len(hemisphere_bins[side])
         print(f"\n  Hemisphere {side_label}: {n_ch} channels")
     print(f"  -> Hemisphere CSV: {csv_path}")
-    print(f"     {min_len} bins")
+    print(f"     {min_len} bins, {num_samples / fs * 1000:.2f} ms/bin")
 
     return csv_path
 
@@ -386,7 +311,6 @@ def plot_median_proxy(csv_path, t_start=0, t_end=100):
 # ──────────────────────────────────────────────
 
 def print_coefficients(fs, cutoff, order=2):
-    """Print the biquad coefficients you'd hardcode on your device."""
     n_sections = order // 2
     print(f"\n{'='*50}")
     print(f"Biquad Highpass Coefficients")
@@ -395,7 +319,7 @@ def print_coefficients(fs, cutoff, order=2):
 
     b0, b1, b2, a1, a2 = compute_biquad_highpass_coeffs(fs, cutoff)
 
-    print(f"\n  // Per biquad section (all sections identical for Butterworth):")
+    print(f"\n  // Per biquad section:")
     print(f"  const float b0 = {b0:.15f};")
     print(f"  const float b1 = {b1:.15f};")
     print(f"  const float b2 = {b2:.15f};")
@@ -412,25 +336,28 @@ def print_coefficients(fs, cutoff, order=2):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python neo_pipeline.py <input_folder> [output_folder] [--plot] [--order=2] [--coeffs]")
+        print("Usage: python neo_pipeline.py <input_folder> [output_folder] [--plot] [--order=2] [--samples=128] [--coeffs]")
         print()
-        print("  --order=N  : filter order (must be even: 2, 4, 6). Default: 2")
-        print("  --coeffs   : print hardcoded biquad coefficients and exit")
+        print("  --order=N    : filter order (must be even: 2, 4, 6). Default: 2")
+        print("  --samples=N  : samples per bin. Default: 128")
+        print("  --coeffs     : print hardcoded biquad coefficients and exit")
         sys.exit(1)
 
     # Parse flags
     filter_order = 2
+    num_samples = NUM_SAMPLES
     for a in sys.argv[1:]:
         if a.startswith('--order='):
             filter_order = int(a.split('=')[1])
+        elif a.startswith('--samples='):
+            num_samples = int(a.split('=')[1])
 
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     do_plot = '--plot' in sys.argv
     do_coeffs = '--coeffs' in sys.argv
 
-    # Coeffs-only mode: just print and exit
+    # Coeffs-only mode
     if do_coeffs:
-        # Need fs — use a dummy or load from first file
         if args:
             input_folder = args[0]
             if os.path.isdir(input_folder):
@@ -460,7 +387,7 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
 
     print(f"Config: cutoff={HIGHPASS_CUTOFF}Hz, biquad order={filter_order} "
-          f"({filter_order//2} section(s)), k={NEO_K}, bin={BIN_MS}ms\n")
+          f"({filter_order//2} section(s)), k={NEO_K}, num_samples={num_samples}\n")
 
     groups = discover_and_group(input_folder)
 
@@ -475,25 +402,27 @@ def main():
         print(f"  {region} {side_label}: channels {[ch for ch, _ in files]}")
 
     csv_paths = []
-
-    # Collect per-channel bin data by side for hemisphere computation
     hemisphere_bins = {'L': [], 'R': []}
+    fs_val = None
 
     for group_key, channel_files in groups.items():
         region, side = group_key
-        path, all_binned, channels = build_csv(
-            group_key, channel_files, output_folder, filter_order=filter_order
+        path, all_binned, channels, fs = build_csv(
+            group_key, channel_files, output_folder,
+            num_samples=num_samples, filter_order=filter_order
         )
         csv_paths.append(path)
+        fs_val = fs
 
-        # Accumulate for hemisphere
         for binned in all_binned:
             hemisphere_bins[side].append(binned)
 
-    # Build single hemisphere CSV (both sides in one file)
-    hemi_path = build_hemisphere_csv(hemisphere_bins, output_folder, bin_ms=BIN_MS)
-    if hemi_path:
-        csv_paths.append(hemi_path)
+    # Build single hemisphere CSV
+    if fs_val:
+        hemi_path = build_hemisphere_csv(hemisphere_bins, output_folder,
+                                          fs=fs_val, num_samples=num_samples)
+        if hemi_path:
+            csv_paths.append(hemi_path)
 
     print(f"\nDone! {len(csv_paths)} CSV(s) created.")
 

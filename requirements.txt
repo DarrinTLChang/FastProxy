@@ -2,3 +2,6 @@ numpy
 scipy
 h5py
 matplotlib
+pandas
+scikit-learn
+plotly
