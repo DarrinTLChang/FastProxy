@@ -19,18 +19,18 @@ NUM_SAMPLES      = 128       # samples per bin (the real-time packet size)
 # BLACKLIST CONFIG — toggle each CSV on/off
 # ══════════════════════════════════════════════
 BLACKLIST_CSVS = {
-    'amplitude':   r"F:\fastProxy_outputs\abnormal_peak\abnormal_amplitude_channels.csv",
+    'amplitude':   r"D:\fastProxy_outputs\abnormal_peak\abnormal_amplitude_channels.csv",
     'correlation': r"F:\fastProxy_outputs\correlation_check\channels_low_correlation.csv",
-    'psd_high':    r"F:\fastProxy_outputs\psd_std3\channels_to_remove_HIGH",
-    'psd_low':     r"F:\fastProxy_outputs\psd_std3\channels_to_remove_LOW",
+    'psd_high':    r"D:\fastProxy_outputs\psd_std3\channels_to_remove_HIGH.csv",
+    'psd_low':     r"F:\fastProxy_outputs\psd_std3\channels_to_remove_LOW.csv",
 }
 
 # Set to True/False to enable/disable each blacklist source
 BLACKLIST_ENABLE = {
-    'amplitude':   False,
+    'amplitude':   True,
     'correlation': False,
-    'psd_high':    False,
-    'psd_low':     False,
+    'psd_high':    True,
+    'psd_low':     True,
 }
 
 # Current run: only channels blacklisted for THIS patient/period are excluded.
@@ -253,7 +253,7 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
 
     For each bin of num_samples:
       1. Biquad highpass filter (state carries across bins)
-      2. NEO with k (independent per bin, loses k samples at each edge)
+      2. NEO with k=1, using lookback from previous bin (127 values per 128-sample bin)
       3. Mean of the NEO output for that bin
 
     Returns (array of per-bin means, fs).
@@ -287,6 +287,7 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
     hp = CascadedHighpass(fs, cutoff, order=filter_order)
 
     bin_means = np.zeros(n_bins)
+    prev = 0.0  # last filtered sample from previous bin
 
     for i in range(n_bins):
         chunk = signal[i * bin_size : (i + 1) * bin_size]
@@ -294,14 +295,21 @@ def process_single_file(filepath, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
         # Biquad highpass (state persists across bins automatically)
         filtered = hp.process_chunk(chunk)
 
-        # NEO on this bin only
-        x = filtered
-        neo_out = x[k:-k] ** 2 - x[:-2*k] * x[2*k:]
+        # NEO with lookback across bin boundary
+        # prepend prev so NEO can use f[0] as a center sample
+        # ext = [prev, f[0]..f[N-1]] -> N+1 samples
+        # NEO centered on f[0]..f[N-2] -> N-1 values (f[N-1] needs next bin)
+        ext = np.empty(len(filtered) + 1)
+        ext[0] = prev
+        ext[1:] = filtered
+        neo_out = ext[1:-1] ** 2 - ext[:-2] * ext[2:]
 
         if len(neo_out) > 0:
             bin_means[i] = np.mean(neo_out)
         else:
             bin_means[i] = 0.0
+
+        prev = filtered[-1]
 
     return bin_means, fs
 

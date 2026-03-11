@@ -17,6 +17,10 @@ BURST_CSV_RIGHT = r""   # path to network_bursts_RS_right.csv
 # Path to fast proxy hemisphere CSV (update this)
 PROXY_CSV       = r""   # path to hemisphere_neo_binned.csv
 
+# Burst window padding (in seconds)
+BURST_PAD_BEFORE = 0.020   # 20 ms before burst_start
+BURST_PAD_AFTER  = 0.100   # 100 ms after burst_end
+
 
 # ──────────────────────────────────────────────
 # Load proxy data
@@ -59,17 +63,18 @@ def load_bursts(csv_path):
 # Create binary burst label for each time bin
 # ──────────────────────────────────────────────
 
-def create_burst_labels(time_s, burst_starts, burst_ends):
+def create_burst_labels(time_s, burst_starts, burst_ends,
+                        pad_before=BURST_PAD_BEFORE, pad_after=BURST_PAD_AFTER):
     """
-    For each time bin, label 1 if it falls within any burst window, 0 otherwise.
+    For each time bin, label 1 if it falls within any padded burst window, 0 otherwise.
 
-    A bin is considered "in burst" if its time falls between any
-    burst_start and burst_end.
+    pad_before: seconds to extend before burst_start (default 20 ms)
+    pad_after:  seconds to extend after burst_end (default 100 ms)
     """
     labels = np.zeros(len(time_s), dtype=int)
 
     for start, end in zip(burst_starts, burst_ends):
-        mask = (time_s >= start) & (time_s <= end)
+        mask = (time_s >= start - pad_before) & (time_s <= end + pad_after)
         labels[mask] = 1
 
     return labels
@@ -128,21 +133,36 @@ def compute_roc_auc(proxy_values, burst_labels, side_label):
 # Find optimal threshold from ROC
 # ──────────────────────────────────────────────
 
-def find_optimal_threshold(fpr, tpr, thresholds):
+def find_optimal_threshold(fpr, tpr, thresholds, burst_labels):
     """
-    Find the threshold that maximizes Youden's J statistic (TPR - FPR).
-    This is the point on the ROC curve farthest from the diagonal.
+    Find optimal thresholds by two criteria:
+      1. Youden's J (TPR - FPR) — best balance of sensitivity/specificity
+      2. Highest accuracy — most total correct predictions (accounts for class imbalance)
     """
+    # Youden's J
     j_scores = tpr - fpr
-    best_idx = np.argmax(j_scores)
+    j_idx = np.argmax(j_scores)
+
+    # Accuracy: acc = TPR * prevalence + (1-FPR) * (1-prevalence)
+    n_total = len(burst_labels)
+    n_pos = np.sum(burst_labels)
+    prevalence = n_pos / n_total
+    accuracy = tpr * prevalence + (1 - fpr) * (1 - prevalence)
+    acc_idx = np.argmax(accuracy)
 
     return {
-        'threshold': thresholds[best_idx],
-        'tpr': tpr[best_idx],
-        'fpr': fpr[best_idx],
-        'sensitivity': tpr[best_idx],
-        'specificity': 1 - fpr[best_idx],
-        'youden_j': j_scores[best_idx],
+        'threshold_youden': thresholds[j_idx],
+        'tpr_youden': tpr[j_idx],
+        'fpr_youden': fpr[j_idx],
+        'sensitivity_youden': tpr[j_idx],
+        'specificity_youden': 1 - fpr[j_idx],
+        'youden_j': j_scores[j_idx],
+        'threshold_acc': thresholds[acc_idx],
+        'tpr_acc': tpr[acc_idx],
+        'fpr_acc': fpr[acc_idx],
+        'sensitivity_acc': tpr[acc_idx],
+        'specificity_acc': 1 - fpr[acc_idx],
+        'best_accuracy': accuracy[acc_idx],
     }
 
 
@@ -173,7 +193,7 @@ def burst_vs_nonburst_stats(proxy_values, burst_labels, side_label):
 # ──────────────────────────────────────────────
 
 def plot_roc(fpr, tpr, auc_score, optimal, side_label, output_path):
-    """Plot the ROC curve with AUC and optimal threshold marked."""
+    """Plot the ROC curve with AUC and both optimal thresholds marked."""
     fig, ax = plt.subplots(figsize=(7, 7))
 
     ax.plot(fpr, tpr, color='steelblue', linewidth=2,
@@ -181,10 +201,16 @@ def plot_roc(fpr, tpr, auc_score, optimal, side_label, output_path):
     ax.plot([0, 1], [0, 1], color='gray', linestyle='--', linewidth=1,
             label='Random (AUC = 0.5)')
 
-    # Mark optimal threshold
-    ax.plot(optimal['fpr'], optimal['tpr'], 'ro', markersize=10,
-            label=f'Optimal (sens={optimal["sensitivity"]:.2f}, '
-                  f'spec={optimal["specificity"]:.2f})')
+    # Mark Youden's J optimal
+    ax.plot(optimal['fpr_youden'], optimal['tpr_youden'], 'ro', markersize=10,
+            label=f'Youden (sens={optimal["sensitivity_youden"]:.2f}, '
+                  f'spec={optimal["specificity_youden"]:.2f})')
+
+    # Mark accuracy optimal
+    ax.plot(optimal['fpr_acc'], optimal['tpr_acc'], 'gs', markersize=10,
+            label=f'Accuracy (sens={optimal["sensitivity_acc"]:.2f}, '
+                  f'spec={optimal["specificity_acc"]:.2f}, '
+                  f'acc={optimal["best_accuracy"]:.2f})')
 
     ax.set_xlabel('False Positive Rate (1 - Specificity)')
     ax.set_ylabel('True Positive Rate (Sensitivity)')
@@ -201,7 +227,8 @@ def plot_roc(fpr, tpr, auc_score, optimal, side_label, output_path):
 
 
 def plot_proxy_with_bursts(time_s, proxy_values, burst_starts, burst_ends,
-                            side_label, output_path):
+                            side_label, output_path,
+                            threshold_acc=None, threshold_youden=None):
     """Interactive plotly plot of proxy trace with burst windows shaded."""
     import plotly.graph_objects as go
 
@@ -221,6 +248,30 @@ def plot_proxy_with_bursts(time_s, proxy_values, burst_starts, burst_ends,
             x0=start, x1=end,
             fillcolor='red', opacity=0.15,
             line_width=0,
+        )
+
+    # Youden's J threshold line
+    if threshold_youden is not None and np.isfinite(threshold_youden):
+        fig.add_hline(
+            y=threshold_youden,
+            line_dash='dash',
+            line_color='orange',
+            line_width=2,
+            annotation_text=f'Youden threshold: {threshold_youden:.3e}',
+            annotation_position='top left',
+            annotation_font_color='orange',
+        )
+
+    # Accuracy-optimal threshold line
+    if threshold_acc is not None and np.isfinite(threshold_acc):
+        fig.add_hline(
+            y=threshold_acc,
+            line_dash='dash',
+            line_color='green',
+            line_width=2,
+            annotation_text=f'Accuracy threshold: {threshold_acc:.3e}',
+            annotation_position='top left',
+            annotation_font_color='green',
         )
 
     fig.update_layout(
@@ -245,8 +296,10 @@ def plot_proxy_with_bursts(time_s, proxy_values, burst_starts, burst_ends,
 def write_results_csv(results, output_path):
     """Write a summary CSV of ROC/AUC results."""
     fieldnames = [
-        'side', 'auc', 'optimal_threshold', 'sensitivity', 'specificity',
-        'youden_j', 'burst_mean', 'nonburst_mean', 'ratio',
+        'side', 'auc',
+        'threshold_youden', 'sensitivity_youden', 'specificity_youden', 'youden_j',
+        'threshold_acc', 'sensitivity_acc', 'specificity_acc', 'best_accuracy',
+        'burst_mean', 'nonburst_mean', 'ratio',
         'n_burst_bins', 'n_nonburst_bins', 'pct_burst',
     ]
 
@@ -288,11 +341,17 @@ def analyze_side(time_s, proxy_values, burst_csv_path, side_key, output_dir):
         return None
 
     # Optimal threshold
-    optimal = find_optimal_threshold(fpr, tpr, thresholds)
-    print(f"    Optimal threshold: {optimal['threshold']:.4e}")
-    print(f"    Sensitivity: {optimal['sensitivity']:.4f}")
-    print(f"    Specificity: {optimal['specificity']:.4f}")
-    print(f"    Youden's J: {optimal['youden_j']:.4f}")
+    optimal = find_optimal_threshold(fpr, tpr, thresholds, labels)
+    print(f"\n    --- Youden's J criterion ---")
+    print(f"    Threshold:   {optimal['threshold_youden']:.4e}")
+    print(f"    Sensitivity: {optimal['sensitivity_youden']:.4f}")
+    print(f"    Specificity: {optimal['specificity_youden']:.4f}")
+    print(f"    Youden's J:  {optimal['youden_j']:.4f}")
+    print(f"\n    --- Highest accuracy criterion ---")
+    print(f"    Threshold:   {optimal['threshold_acc']:.4e}")
+    print(f"    Sensitivity: {optimal['sensitivity_acc']:.4f}")
+    print(f"    Specificity: {optimal['specificity_acc']:.4f}")
+    print(f"    Accuracy:    {optimal['best_accuracy']:.4f}")
 
     # Burst vs non-burst stats
     burst_vs_nonburst_stats(proxy_values, labels, side_label)
@@ -311,7 +370,9 @@ def analyze_side(time_s, proxy_values, burst_csv_path, side_key, output_dir):
 
     plot_proxy_with_bursts(time_s, proxy_values, burst_starts, burst_ends,
                            side_label,
-                           os.path.join(output_dir, f'proxy_bursts_{side_key}.html'))
+                           os.path.join(output_dir, f'proxy_bursts_{side_key}.html'),
+                           threshold_acc=optimal['threshold_acc'],
+                           threshold_youden=optimal['threshold_youden'])
 
     n_burst = int(np.sum(labels))
     n_total = len(labels)
@@ -319,10 +380,14 @@ def analyze_side(time_s, proxy_values, burst_csv_path, side_key, output_dir):
     return {
         'side': side_label,
         'auc': round(auc_score, 4),
-        'optimal_threshold': f'{optimal["threshold"]:.4e}',
-        'sensitivity': round(optimal['sensitivity'], 4),
-        'specificity': round(optimal['specificity'], 4),
+        'threshold_youden': f'{optimal["threshold_youden"]:.4e}',
+        'sensitivity_youden': round(optimal['sensitivity_youden'], 4),
+        'specificity_youden': round(optimal['specificity_youden'], 4),
         'youden_j': round(optimal['youden_j'], 4),
+        'threshold_acc': f'{optimal["threshold_acc"]:.4e}',
+        'sensitivity_acc': round(optimal['sensitivity_acc'], 4),
+        'specificity_acc': round(optimal['specificity_acc'], 4),
+        'best_accuracy': round(optimal['best_accuracy'], 4),
         'burst_mean': f'{burst_mean:.4e}',
         'nonburst_mean': f'{nonburst_mean:.4e}',
         'ratio': round(ratio, 2),
@@ -358,6 +423,7 @@ def main():
         sys.exit(1)
 
     print(f"Loading proxy data from: {proxy_csv}")
+    print(f"Burst padding: -{BURST_PAD_BEFORE*1000:.0f} ms before, +{BURST_PAD_AFTER*1000:.0f} ms after")
     proxy_data = load_proxy(proxy_csv)
     time_s = proxy_data['time_s']
     print(f"  {len(time_s)} time bins loaded")

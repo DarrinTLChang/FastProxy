@@ -1,8 +1,9 @@
 """Plot time_s vs hemisphere_L_median_proxy and time_s vs hemisphere_R_median_proxy."""
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-CSV_PATH = r"C:\Users\Maral\Desktop\Darrin\FastProxy\s523_test_outputs\order3_raw_128samples_v2\hemisphere_neo_binned.csv"
+CSV_PATH = r"C:\Users\darri\OneDrive\Documents\GitHub\FastProxy\to_add\s523_p1_order3_128_V6_lookback_amplitude_psd\hemisphere_neo_binned.csv"
 
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
@@ -10,23 +11,50 @@ def main():
     L_proxy = data[:, 1]
     R_proxy = data[:, 2]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=("Left hemisphere", "Right hemisphere"),
+    )
 
-    ax1.plot(time_s, L_proxy, color="steelblue", linewidth=0.5)
-    ax1.set_ylabel("hemisphere_L_median_proxy")
-    ax1.set_title("Left hemisphere")
-    ax1.grid(True, alpha=0.3)
+    fig.add_trace(
+        go.Scattergl(x=time_s, y=L_proxy, mode="lines", line=dict(color="steelblue", width=1), name="hemisphere_L_median_proxy"),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
+        row=2,
+        col=1,
+    )
 
-    ax2.plot(time_s, R_proxy, color="coral", linewidth=0.5)
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("hemisphere_R_median_proxy")
-    ax2.set_title("Right hemisphere")
-    ax2.grid(True, alpha=0.3)
+    fig.update_yaxes(title_text="hemisphere_L_median_proxy", row=1, col=1)
+    fig.update_yaxes(title_text="hemisphere_R_median_proxy", row=2, col=1)
+    fig.update_xaxes(title_text="Time (s)", row=2, col=1)
 
-    plt.tight_layout()
-    plt.savefig(CSV_PATH.replace(".csv", "_plots.png"), dpi=150)
-    print(f"Saved {CSV_PATH.replace('.csv', '_plots.png')}")
-    plt.show()
+    fig.update_layout(
+        title="Hemisphere median proxy vs time",
+        template="plotly_white",
+        height=650,
+        showlegend=False,
+    )
+
+    html_path = CSV_PATH.replace(".csv", "_plots.html")
+    fig.write_html(html_path, include_plotlyjs="cdn")
+    print(f"Saved {html_path}")
+
+    # Optional: also save a PNG if kaleido is installed.
+    # pip install -U kaleido
+    try:
+        png_path = CSV_PATH.replace(".csv", "_plots.png")
+        fig.write_image(png_path, scale=2)
+        print(f"Saved {png_path}")
+    except Exception:
+        pass
+
+    fig.show()
 
 if __name__ == "__main__":
     main()
