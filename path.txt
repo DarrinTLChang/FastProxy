@@ -1,0 +1,11 @@
+python psd_remove.py 
+
+"C:\Users\Maral\Desktop\Darrin\FastProxy\patient_data_raw" "C:\Users\Maral\Desktop\Darrin\FastProxy\patient_data_proxy\psd_s523"
+
+"C:\Users\Maral\Desktop\Darrin\FastProxy\patient_data_raw\s523\Mat Data\Voluntary\micro\period1" "C:\Users\Maral\Desktop\Darrin\FastProxy\s523_test_outputs\"
+
+
+"F:\" "F:\fastProxy_outputs\"
+
+ python correlation_check.py "F:\" "F:\fastProxy_outputs\"
+

@@ -8,6 +8,8 @@
 !fastProxyV4.py
 !fastProxyV5.py
 !fastProxyV6.py
+!fastProxyV7.py
+!fastProxyV8.py
 !psd_remove.py
 !highpass.py
 !abnormal_peak.py
@@ -15,5 +17,6 @@
 !plot_hemisphere_proxy.py
 !validate_roc.py
 !correlation_check.py
+!path.txt
 # !plot.py
 !README.md
