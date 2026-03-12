@@ -3,13 +3,12 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-CSV_PATH = r"C:\Users\darri\Documents\FastProxy\s523_p1_output\Order2_489_V6_noBlacklist_CAR_commonFiltered\hemisphere_neo_binned.csv"
-
+CSV_PATH = r"/Users/darrin/FastProxy/s531_output/FP_V7_order2_noBlacklist_vo/hemisphere_neo_binned.csv"
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
     time_s = data[:, 0]
     L_proxy = data[:, 1]
-    R_proxy = data[:, 2]
+    # R_proxy = data[:, 2]
 
     fig = make_subplots(
         rows=2,
@@ -24,11 +23,11 @@ def main():
         row=1,
         col=1,
     )
-    fig.add_trace(
-        go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
-        row=2,
-        col=1,
-    )
+    # fig.add_trace(
+    #     go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
+    #     row=2,
+    #     col=1,
+    # )
 
     fig.update_yaxes(title_text="hemisphere_L_median_proxy", row=1, col=1)
     fig.update_yaxes(title_text="hemisphere_R_median_proxy", row=2, col=1)

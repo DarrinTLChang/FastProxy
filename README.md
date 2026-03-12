@@ -53,14 +53,15 @@ Square each sample, sum, divide, sqrt
 
 New pipeline (biquad + NEO + mean per channel):
 
-Biquad: 5 ops/sample
+Biquad: 11 ops/sample
 NEO: 3 ops/sample
 Mean: 1 op/sample
-480 samples → ~4,320 operations (n samples * 9)
+480 samples → ~4,320 operations (n samples * 15)
 
 biquad 4-5 times slower, RMS = 24micro s
 
 20ms at 24000 sampling rate = 480 samples
 
 5.6 ms at 24000 sampling rate = 134
+
 
