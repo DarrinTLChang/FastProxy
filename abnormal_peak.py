@@ -42,6 +42,27 @@ def group_mat_files(folder):
     return groups
 
 
+def list_mat_files(folder, recursive=False):
+    """
+    List .mat files in a folder. If recursive=True, walk subfolders too.
+    Returns absolute file paths.
+    """
+    folder = os.path.abspath(folder)
+    if not recursive:
+        return [
+            os.path.join(folder, f)
+            for f in sorted(os.listdir(folder))
+            if f.lower().endswith('.mat') and os.path.isfile(os.path.join(folder, f))
+        ]
+
+    paths = []
+    for root, _, files in os.walk(folder):
+        for f in sorted(files):
+            if f.lower().endswith('.mat'):
+                paths.append(os.path.join(root, f))
+    return paths
+
+
 def discover_drive(drive_root):
     discoveries = []
     for entry in sorted(os.listdir(drive_root)):
@@ -207,26 +228,39 @@ def plot_amplitude_overview(signal, fs, analysis, label, output_path):
 # ──────────────────────────────────────────────
 
 def analyze_period(micro_path, output_dir, patient, period,
-                   threshold_std=PEAK_THRESH_STD, save_plots=True):
+                   threshold_std=PEAK_THRESH_STD, save_plots=True, recursive=False):
+    """
+    Analyze a folder of .mat files.
+
+    - If files match the expected micro<region>_<side>_<channel>.mat pattern,
+      results are grouped by (region, side) and sorted by channel.
+    - Otherwise, it will still analyze every .mat file it finds.
+    """
+    micro_path = os.path.abspath(micro_path)
+
     groups = group_mat_files(micro_path)
-    if not groups:
+    all_mat_paths = list_mat_files(micro_path, recursive=recursive)
+    if not all_mat_paths:
         return [], []
 
     os.makedirs(output_dir, exist_ok=True)
     all_results = []
     csv_rows = []
 
+    # If grouping succeeded, analyze those first (nice reporting).
+    grouped_paths = set()
     for (region, side), channel_files in sorted(groups.items()):
         side_label = 'Left' if side == 'L' else 'Right'
         group_key = f'{region}_{side}'
-        print(f"    {region} {side_label} ({len(channel_files)} channels)")
+        print(f"    {region} {side_label} ({len(channel_files)} files)")
 
         for channel, filepath in channel_files:
+            grouped_paths.add(os.path.abspath(filepath))
             signal, fs = load_signal(filepath)
             analysis = analyze_amplitude(signal, fs, threshold_std=threshold_std)
 
             status = "ABNORMAL" if analysis['has_abnormal'] else "OK"
-            print(f"      ch{channel}: {status}  "
+            print(f"      {os.path.basename(filepath)}: {status}  "
                   f"mean={analysis['amp_mean']:.2e}  "
                   f"std={analysis['amp_std']:.2e}  "
                   f"max={analysis['max_std_deviation']:.1f} STDs  "
@@ -260,8 +294,56 @@ def analyze_period(micro_path, output_dir, patient, period,
             if save_plots:
                 plot_amplitude_overview(
                     signal, fs, analysis,
-                    label=f'{patient} {period} {group_key} ch{channel}',
-                    output_path=os.path.join(output_dir, f'{group_key}_ch{channel}_amplitude.png')
+                    label=f'{patient} {period} {group_key} {os.path.basename(filepath)}',
+                    output_path=os.path.join(output_dir, f'{group_key}_{os.path.splitext(os.path.basename(filepath))[0]}_amplitude.png')
+                )
+
+    # Analyze any remaining .mat files that didn't match the naming pattern.
+    ungrouped = [p for p in all_mat_paths if os.path.abspath(p) not in grouped_paths]
+    if ungrouped:
+        print(f"    Ungrouped ({len(ungrouped)} files)")
+        for filepath in ungrouped:
+            signal, fs = load_signal(filepath)
+            analysis = analyze_amplitude(signal, fs, threshold_std=threshold_std)
+
+            status = "ABNORMAL" if analysis['has_abnormal'] else "OK"
+            print(f"      {os.path.basename(filepath)}: {status}  "
+                  f"mean={analysis['amp_mean']:.2e}  "
+                  f"std={analysis['amp_std']:.2e}  "
+                  f"max={analysis['max_std_deviation']:.1f} STDs  "
+                  f"events={analysis['n_events']}")
+
+            all_results.append({
+                'patient': patient,
+                'period': period,
+                'region': 'unknown',
+                'side': 'unknown',
+                'channel': os.path.splitext(os.path.basename(filepath))[0],
+                'analysis': analysis,
+            })
+
+            if analysis['has_abnormal']:
+                csv_rows.append({
+                    'patient': patient,
+                    'period': period,
+                    'region': 'unknown',
+                    'side': 'unknown',
+                    'channel': os.path.splitext(os.path.basename(filepath))[0],
+                    'amp_mean': analysis['amp_mean'],
+                    'amp_std': analysis['amp_std'],
+                    'amp_max': analysis['amp_max'],
+                    'max_std_deviation': round(analysis['max_std_deviation'], 2),
+                    'n_events': analysis['n_events'],
+                    'n_peak_samples': analysis['n_peaks'],
+                    'pct_peak_samples': round(analysis['pct_peaks'], 4),
+                })
+
+            if save_plots:
+                stem = os.path.splitext(os.path.basename(filepath))[0]
+                plot_amplitude_overview(
+                    signal, fs, analysis,
+                    label=f'{patient} {period} {stem}',
+                    output_path=os.path.join(output_dir, f'ungrouped_{stem}_amplitude.png')
                 )
 
     write_period_summary(all_results, output_dir)
@@ -348,6 +430,7 @@ def main():
         sys.exit(1)
 
     threshold_std = PEAK_THRESH_STD
+    recursive = '--recursive' in sys.argv
     for a in sys.argv[1:]:
         if a.startswith('--threshold='):
             threshold_std = float(a.split('=')[1])
@@ -373,7 +456,8 @@ def main():
         all_results, csv_rows = analyze_period(
             mat_folder, output_folder,
             patient='unknown', period='unknown',
-            threshold_std=threshold_std
+            threshold_std=threshold_std,
+            recursive=recursive,
         )
 
         master_csv_path = os.path.join(output_folder, 'abnormal_amplitude_channels.csv')

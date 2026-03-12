@@ -45,6 +45,27 @@ def group_mat_files(folder):
     return groups
 
 
+def list_mat_files(folder, recursive=False):
+    """
+    List .mat files in a folder. If recursive=True, walk subfolders too.
+    Returns absolute file paths.
+    """
+    folder = os.path.abspath(folder)
+    if not recursive:
+        return [
+            os.path.join(folder, f)
+            for f in sorted(os.listdir(folder))
+            if f.lower().endswith('.mat') and os.path.isfile(os.path.join(folder, f))
+        ]
+
+    paths = []
+    for root, _, files in os.walk(folder):
+        for f in sorted(files):
+            if f.lower().endswith('.mat'):
+                paths.append(os.path.join(root, f))
+    return paths
+
+
 def discover_drive(drive_root):
     discoveries = []
     for entry in sorted(os.listdir(drive_root)):
@@ -179,29 +200,42 @@ def find_outlier_channels(channel_data, threshold_mads=OUTLIER_THRESH):
 # ──────────────────────────────────────────────
 
 def analyze_period(micro_path, output_dir, patient, period,
-                   threshold_std=OUTLIER_THRESH, save_plots=True):
+                   threshold_std=OUTLIER_THRESH, save_plots=True, recursive=False):
     """
     Run PSD analysis on all channels in a folder.
     Returns (summary dict, list of rows for master CSV).
     """
+    micro_path = os.path.abspath(micro_path)
+
     groups = group_mat_files(micro_path)
-    if not groups:
+    all_mat_paths = list_mat_files(micro_path, recursive=recursive)
+    if not all_mat_paths:
         return {}, []
 
     os.makedirs(output_dir, exist_ok=True)
     summary = {}
     csv_rows = []
 
+    # If we didn't match any expected filenames, analyze everything as one group.
+    if not groups:
+        groups = {('unknown', 'U'): [(os.path.splitext(os.path.basename(p))[0], p) for p in all_mat_paths]}
+
+    # Track which files were included in the nice (region,side,channel) grouping.
+    grouped_paths = set()
+
     for (region, side), channel_files in sorted(groups.items()):
         side_label = 'Left' if side == 'L' else 'Right'
+        if side == 'U':
+            side_label = 'Unknown'
         group_key = f'{region}_{side}'
-        print(f"    {region} {side_label} ({len(channel_files)} channels)")
+        print(f"    {region} {side_label} ({len(channel_files)} files)")
 
         channel_data = []
         all_freqs = []
         all_psds = []
 
         for channel, filepath in channel_files:
+            grouped_paths.add(os.path.abspath(filepath))
             signal, fs = load_signal(filepath)
             freqs, psd = compute_psd(signal, fs)
             harm_powers, total_noise = measure_harmonic_power(freqs, psd)
@@ -306,6 +340,7 @@ def analyze_period(micro_path, output_dir, patient, period,
 
 def plot_psd_grid(all_freqs, all_psds, all_labels, all_outlier, title, output_path,
                   freq_max=500):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     n = len(all_freqs)
     cols = min(n, 4)
     rows = (n + cols - 1) // cols
@@ -347,6 +382,7 @@ def plot_psd_grid(all_freqs, all_psds, all_labels, all_outlier, title, output_pa
 
 def plot_psd_overlay(all_freqs, all_psds, all_labels, all_outlier, title, output_path,
                      freq_max=500):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fig, ax = plt.subplots(figsize=(12, 5))
 
     for i in range(len(all_freqs)):
@@ -378,6 +414,7 @@ def plot_psd_overlay(all_freqs, all_psds, all_labels, all_outlier, title, output
 
 
 def plot_noise_bar(results, group_median, mad, threshold_mads, title, output_path):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     channels = [f'ch{r["channel"]}' for r in results]
     totals = [r['total_noise'] for r in results]
     outliers = [r['is_outlier'] for r in results]
@@ -407,6 +444,7 @@ def plot_noise_bar(results, group_median, mad, threshold_mads, title, output_pat
 # ──────────────────────────────────────────────
 
 def write_summary(summary, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
     txt_path = os.path.join(output_dir, 'channel_quality_summary.txt')
 
     with open(txt_path, 'w', encoding='utf-8') as f:
@@ -510,6 +548,7 @@ def main():
         sys.exit(1)
 
     threshold_std = OUTLIER_THRESH
+    recursive = '--recursive' in sys.argv
     for a in sys.argv[1:]:
         if a.startswith('--threshold='):
             threshold_std = float(a.split('=')[1])
@@ -535,7 +574,8 @@ def main():
         summary, csv_rows = analyze_period(
             mat_folder, output_folder,
             patient='unknown', period='unknown',
-            threshold_std=threshold_std
+            threshold_std=threshold_std,
+            recursive=recursive,
         )
 
         write_master_csvs(csv_rows, output_folder)
