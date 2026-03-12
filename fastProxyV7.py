@@ -369,45 +369,55 @@ def build_csv(group_key, channel_files, output_dir, blacklist=None,
     region, side = group_key
     side_label = 'Left' if side == 'L' else 'Right'
 
-    # Filter out blacklisted channels
+    # Keep full list for loading and CAR; blacklist only affects which channels go to proxy/CSV
+    channel_files_full = list(channel_files)
+    n_total = len(channel_files_full)
+
+    n_included = n_total
     if blacklist:
-        original_count = len(channel_files)
-        channel_files = [(ch, fp) for ch, fp in channel_files
-                         if (region, side, ch) not in blacklist]
-        removed = original_count - len(channel_files)
-        if removed > 0:
-            print(f"\n  {region} {side_label}: {removed} channel(s) blacklisted, "
-                  f"{len(channel_files)} remaining")
+        n_excluded = sum(1 for ch, _ in channel_files_full if (region, side, ch) in blacklist)
+        n_included = n_total - n_excluded
+        if n_excluded > 0:
+            print(f"\n  {region} {side_label}: {n_excluded} channel(s) blacklisted, "
+                  f"{n_included} used for proxy (CAR still uses all {n_total} channels)")
+        if n_included == 0:
+            print(f"\n  {region} {side_label}: ALL channels blacklisted, skipping.")
+            return None, [], [], None
 
-    if not channel_files:
-        print(f"\n  {region} {side_label}: ALL channels blacklisted, skipping.")
-        return None, [], [], None
+    print(f"\nProcessing {region} {side_label} ({n_total} channels for CAR, "
+          f"{n_included if blacklist else n_total} for proxy)...")
 
-    print(f"\nProcessing {region} {side_label} ({len(channel_files)} channels)...")
-
-    # Step 1: Load all signals
+    # Step 1: Load all signals (every channel in the group)
     print(f"  Loading signals...")
     signals = []
-    channels = []
     fs_val = None
-    for channel, filepath in channel_files:
+    for channel, filepath in channel_files_full:
         print(f"    ch{channel}: {os.path.basename(filepath)}")
         signal, fs = load_signal_from_mat(filepath)
         signals.append(signal)
-        channels.append(channel)
         fs_val = fs
 
     n_bins = min(len(s) // num_samples for s in signals)
 
-    # Step 2: Apply CAR (subtract mean across channels, bin-by-bin, before HP)
-    print(f"  Applying Common Average Reference ({len(signals)} channels)...")
+    # Step 2: CAR using ALL channels (mean over all, subtract from all)
+    print(f"  Applying Common Average Reference (all {len(signals)} channels)...")
     apply_car_inplace(signals, n_bins, num_samples)
 
-    # Step 3: HP -> NEO -> mean per channel
-    print(f"  Running HP + NEO...")
+    # Step 3: Which channels to include in proxy/CSV (exclude blacklisted)
+    if blacklist:
+        included_indices = [i for i in range(n_total)
+                           if (region, side, channel_files_full[i][0]) not in blacklist]
+    else:
+        included_indices = list(range(n_total))
+
+    # Step 4: HP -> NEO -> mean only for included channels
+    print(f"  Running HP + NEO on {len(included_indices)} channel(s)...")
     all_binned = []
-    for i, (channel, signal) in enumerate(zip(channels, signals)):
-        binned = process_signal(signal, fs_val, n_bins, cutoff=cutoff, k=k,
+    channels = []
+    for i in included_indices:
+        ch = channel_files_full[i][0]
+        channels.append(ch)
+        binned = process_signal(signals[i], fs_val, n_bins, cutoff=cutoff, k=k,
                                 num_samples=num_samples, filter_order=filter_order)
         all_binned.append(binned)
 

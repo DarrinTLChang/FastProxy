@@ -20,7 +20,7 @@ PEAK_THRESH_STD = 50         # flag if any sample exceeds this many STDs above m
 
 def parse_mat_filename(filename):
     name = os.path.splitext(filename)[0]
-    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)$', name)
+    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)(?:_CommonFiltered)?$', name)
     if not match:
         return None
     region, side, channel = match.groups()
@@ -115,18 +115,6 @@ def load_signal(filepath):
 # ──────────────────────────────────────────────
 
 def analyze_amplitude(signal, fs, threshold_std=PEAK_THRESH_STD):
-    """
-    Analyze the raw signal amplitude.
-
-    Returns dict with:
-      - mean, std of the absolute amplitude
-      - max absolute amplitude
-      - threshold value
-      - number of samples exceeding threshold
-      - percentage of samples exceeding threshold
-      - times (in seconds) of the peaks
-      - has_abnormal: True if any peaks found
-    """
     amp = np.abs(signal)
     amp_mean = np.mean(amp)
     amp_std = np.std(amp)
@@ -134,19 +122,16 @@ def analyze_amplitude(signal, fs, threshold_std=PEAK_THRESH_STD):
 
     threshold = amp_mean + threshold_std * amp_std
 
-    # Find samples exceeding threshold
     peak_mask = amp > threshold
     n_peaks = np.sum(peak_mask)
     pct_peaks = 100.0 * n_peaks / len(signal)
 
-    # Get times of peaks
     peak_indices = np.where(peak_mask)[0]
     peak_times = peak_indices / fs
 
-    # Group nearby peaks into events (within 10ms of each other)
     events = []
     if len(peak_indices) > 0:
-        gap_samples = int(fs * 0.01)  # 10ms
+        gap_samples = int(fs * 0.01)
         event_start = peak_indices[0]
         event_end = peak_indices[0]
 
@@ -164,7 +149,6 @@ def analyze_amplitude(signal, fs, threshold_std=PEAK_THRESH_STD):
                 event_start = idx
                 event_end = idx
 
-        # Last event
         events.append({
             'start_s': event_start / fs,
             'end_s': event_end / fs,
@@ -192,16 +176,12 @@ def analyze_amplitude(signal, fs, threshold_std=PEAK_THRESH_STD):
 # ──────────────────────────────────────────────
 
 def plot_amplitude_overview(signal, fs, analysis, label, output_path):
-    """
-    Plot the full raw signal with threshold lines and peak markers.
-    """
     t = np.arange(len(signal)) / fs
     amp = np.abs(signal)
 
     fig, ax = plt.subplots(figsize=(14, 4))
     ax.plot(t, amp, linewidth=0.2, color='steelblue', alpha=0.6)
 
-    # Threshold line
     ax.axhline(analysis['threshold'], color='red', linestyle='--', linewidth=0.8,
                label=f'Threshold ({PEAK_THRESH_STD} STDs)')
     ax.axhline(analysis['amp_mean'], color='gray', linestyle='-', linewidth=0.5,
@@ -261,7 +241,6 @@ def analyze_period(micro_path, output_dir, patient, period,
                 'analysis': analysis,
             })
 
-            # Only add to CSV if abnormal
             if analysis['has_abnormal']:
                 csv_rows.append({
                     'patient': patient,
@@ -285,7 +264,6 @@ def analyze_period(micro_path, output_dir, patient, period,
                     output_path=os.path.join(output_dir, f'{group_key}_ch{channel}_amplitude.png')
                 )
 
-    # Write per-period summary
     write_period_summary(all_results, output_dir)
 
     return all_results, csv_rows
@@ -296,7 +274,6 @@ def analyze_period(micro_path, output_dir, patient, period,
 # ──────────────────────────────────────────────
 
 def write_period_summary(all_results, output_dir):
-    """Write a CSV summary of ALL channels for this period."""
     csv_path = os.path.join(output_dir, 'amplitude_check_summary.csv')
 
     fieldnames = [
@@ -335,7 +312,6 @@ def write_period_summary(all_results, output_dir):
 # ──────────────────────────────────────────────
 
 def write_master_csv(all_rows, output_path):
-    """Write CSV with ONLY channels that have abnormal peaks."""
     if not all_rows:
         print(f"\nNo abnormal channels found — no CSV written.")
         return
