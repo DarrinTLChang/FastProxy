@@ -18,5 +18,10 @@
 !validate_roc.py
 !correlation_check.py
 !path.txt
+!adc_plot.py
+!binary_plot.py
+!fastProxyV5
+!fastProxyV7
+
 # !plot.py
 !README.md

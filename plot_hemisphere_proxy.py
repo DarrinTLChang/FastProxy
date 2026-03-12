@@ -3,7 +3,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-CSV_PATH = r"/Users/darrin/FastProxy/s531_output/FP_V7_order2_noBlacklist_vo/hemisphere_neo_binned.csv"
+CSV_PATH = r"C:\Users\darri\OneDrive\Documents\GitHub\FastProxy\s531_output\p1-3_output\p1_output\hemisphere_neo_binned.csv"
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
     time_s = data[:, 0]

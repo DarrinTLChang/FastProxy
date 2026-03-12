@@ -12,7 +12,27 @@ import matplotlib.pyplot as plt
 # ══════════════════════════════════════════════
 HIGHPASS_CUTOFF  = 350       # Hz
 NEO_K            = 1
-NUM_SAMPLES      = 489       # samples per bin (the real-time packet size)
+NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
+
+#
+# ══════════════════════════════════════════════
+# INCLUDE LIST (ALLOWLIST) — only use these channels
+# ══════════════════════════════════════════════
+# If enabled, FastProxy will ONLY use channels listed here for each region/side.
+# This happens BEFORE any blacklist filtering.
+#
+# How to use:
+# - Set INCLUDE_ENABLE = True
+# - For each region/side you care about, list the channels you want.
+# - Comment out channels you don't want (leave the line with a #).
+#
+# Notes:
+# - The include list is defined in the text file below (recommended).
+#
+INCLUDE_ENABLE = True
+
+# Include list is stored in `include_channels.py` so it's easy to comment out.
+INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
 
 
 # ══════════════════════════════════════════════
@@ -35,7 +55,7 @@ BLACKLIST_ENABLE = {
 
 # Current run: only channels blacklisted for THIS patient/period are excluded.
 # Set to None to skip blacklist filtering (no channels excluded by blacklist).
-CURRENT_PATIENT = "s523"   # e.g. "s523"
+CURRENT_PATIENT = "s531"   # e.g. "s523"
 CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appears in CSV)
 
 
@@ -360,6 +380,82 @@ def discover_and_group(folder):
     return groups
 
 
+def load_include_channels_py(path):
+    """
+    Load include channels from a python file that defines INCLUDE_CHANNELS dict.
+
+    Expected in that file:
+      INCLUDE_CHANNELS = { "GPi1_L": [1,2,3], ... }
+
+    Returns: dict {"GPi1_L": {1,2,3,...}, ...}
+    """
+    if not path or not os.path.isfile(path):
+        return {}
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("include_channels", path)
+    if spec is None or spec.loader is None:
+        return {}
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    raw = getattr(mod, "INCLUDE_CHANNELS", None)
+    if not isinstance(raw, dict):
+        return {}
+
+    include_map = {}
+    for key, chans in raw.items():
+        if not key or not chans:
+            continue
+        s = set()
+        for ch in chans:
+            try:
+                s.add(int(ch))
+            except Exception:
+                continue
+        if s:
+            include_map[str(key)] = s
+    return include_map
+
+
+def apply_include_list_from_py(groups, include_py_path):
+    """
+    Apply include list from python include module.
+
+    IMPORTANT behavior:
+    - If the include module exists and has entries, ONLY region/side groups that
+      appear in INCLUDE_CHANNELS will be processed.
+    - Any discovered group not listed in INCLUDE_CHANNELS is skipped entirely.
+    """
+    include_map = load_include_channels_py(include_py_path)
+    if not include_map:
+        return groups
+
+    out = {}
+    for (region, side), files in groups.items():
+        key = f"{region}_{side}"
+        include = include_map.get(key)
+        if not include:
+            # Not listed -> skip entirely
+            continue
+
+        kept = [(ch, fp) for ch, fp in files if ch in include]
+        removed = sorted([ch for ch, _ in files if ch not in include])
+
+        side_label = 'Left' if side == 'L' else 'Right'
+        print(f"Include list: {key} -> keeping {len(kept)}/{len(files)} channels")
+        if removed:
+            print(f"  Excluding channels: {removed}")
+
+        if kept:
+            out[(region, side)] = kept
+        else:
+            print(f"  WARNING: include list removed all channels for {key}; skipping group.")
+
+    return out
+
+
 # ──────────────────────────────────────────────
 # CSV output
 # ──────────────────────────────────────────────
@@ -647,6 +743,8 @@ def main():
         print("  Blacklist disabled (CURRENT_PATIENT or CURRENT_PERIOD not set)\n")
 
     groups = discover_and_group(input_folder)
+    if INCLUDE_ENABLE:
+        groups = apply_include_list_from_py(groups, INCLUDE_PY_PATH)
 
     if not groups:
         print("No matching .mat files found.")
