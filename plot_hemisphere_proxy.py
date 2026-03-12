@@ -4,6 +4,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 CSV_PATH = r"C:\Users\darri\OneDrive\Documents\GitHub\FastProxy\s531_output\p1-3_output\p1_output\hemisphere_neo_binned.csv"
+
+# Horizontal threshold line (same units as proxy). Set to None to disable.
+THRESHOLD = 90  # e.g. 1e7
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
     time_s = data[:, 0]
@@ -39,6 +42,21 @@ def main():
         height=650,
         showlegend=False,
     )
+
+    # Optional horizontal threshold line on both subplots
+    if THRESHOLD is not None:
+        fig.add_hline(
+            y=THRESHOLD,
+            line=dict(color="black", width=1, dash="dash"),
+            row=1,
+            col=1,
+        )
+        fig.add_hline(
+            y=THRESHOLD,
+            line=dict(color="black", width=1, dash="dash"),
+            row=2,
+            col=1,
+        )
 
     html_path = CSV_PATH.replace(".csv", "_plots.html")
     fig.write_html(html_path, include_plotlyjs="cdn")

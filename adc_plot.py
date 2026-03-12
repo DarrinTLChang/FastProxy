@@ -1,7 +1,7 @@
 import pandas as pd
 import plotly.graph_objects as go
 
-path = r"D:\s531\processed data from 531\Mat Data\E\CL testing\period1\ADC1.csv"
+path = r"F:\s531\processed data from 531\Mat Data\E\CL testing\period3\ADC1.csv"
 # Read first two columns and coerce to numeric (handles headers/mixed types)
 df = pd.read_csv(path, usecols=[0, 1], low_memory=False)
 df.iloc[:, 0] = pd.to_numeric(df.iloc[:, 0], errors="coerce")
