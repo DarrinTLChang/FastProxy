@@ -35,8 +35,8 @@ BLACKLIST_ENABLE = {
 
 # Current run: only channels blacklisted for THIS patient/period are excluded.
 # Set to None to skip blacklist filtering (no channels excluded by blacklist).
-CURRENT_PATIENT = "s523"   # e.g. "s523"
-CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appears in CSV)
+CURRENT_PATIENT = "s530"   # e.g. "s523"
+CURRENT_PERIOD = "period3" # e.g. "1" or "period1" (must match how period appears in CSV)
 
 
 # ──────────────────────────────────────────────
