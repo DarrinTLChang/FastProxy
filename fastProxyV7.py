@@ -12,7 +12,27 @@ import matplotlib.pyplot as plt
 # ══════════════════════════════════════════════
 HIGHPASS_CUTOFF  = 350       # Hz
 NEO_K            = 1
-NUM_SAMPLES      = 489       # samples per bin (the real-time packet size)
+NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
+
+#
+# ══════════════════════════════════════════════
+# INCLUDE LIST (ALLOWLIST) — only use these channels
+# ══════════════════════════════════════════════
+# If enabled, FastProxy will ONLY use channels listed here for each region/side.
+# This happens BEFORE any blacklist filtering.
+#
+# How to use:
+# - Set INCLUDE_ENABLE = True
+# - For each region/side you care about, list the channels you want.
+# - Comment out channels you don't want (leave the line with a #).
+#
+# Notes:
+# - The include list is defined in the text file below (recommended).
+#
+INCLUDE_ENABLE = True
+
+# Include list is stored in `include_channels.py` so it's easy to comment out.
+INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
 
 
 # ══════════════════════════════════════════════
@@ -35,8 +55,8 @@ BLACKLIST_ENABLE = {
 
 # Current run: only channels blacklisted for THIS patient/period are excluded.
 # Set to None to skip blacklist filtering (no channels excluded by blacklist).
-CURRENT_PATIENT = "s530"   # e.g. "s523"
-CURRENT_PERIOD = "period3" # e.g. "1" or "period1" (must match how period appears in CSV)
+CURRENT_PATIENT = "s531"   # e.g. "s523"
+CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appears in CSV)
 
 
 # ──────────────────────────────────────────────
@@ -360,6 +380,82 @@ def discover_and_group(folder):
     return groups
 
 
+def load_include_channels_py(path):
+    """
+    Load include channels from a python file that defines INCLUDE_CHANNELS dict.
+
+    Expected in that file:
+      INCLUDE_CHANNELS = { "GPi1_L": [1,2,3], ... }
+
+    Returns: dict {"GPi1_L": {1,2,3,...}, ...}
+    """
+    if not path or not os.path.isfile(path):
+        return {}
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("include_channels", path)
+    if spec is None or spec.loader is None:
+        return {}
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    raw = getattr(mod, "INCLUDE_CHANNELS", None)
+    if not isinstance(raw, dict):
+        return {}
+
+    include_map = {}
+    for key, chans in raw.items():
+        if not key or not chans:
+            continue
+        s = set()
+        for ch in chans:
+            try:
+                s.add(int(ch))
+            except Exception:
+                continue
+        if s:
+            include_map[str(key)] = s
+    return include_map
+
+
+def apply_include_list_from_py(groups, include_py_path):
+    """
+    Apply include list from python include module.
+
+    IMPORTANT behavior:
+    - If the include module exists and has entries, ONLY region/side groups that
+      appear in INCLUDE_CHANNELS will be processed.
+    - Any discovered group not listed in INCLUDE_CHANNELS is skipped entirely.
+    """
+    include_map = load_include_channels_py(include_py_path)
+    if not include_map:
+        return groups
+
+    out = {}
+    for (region, side), files in groups.items():
+        key = f"{region}_{side}"
+        include = include_map.get(key)
+        if not include:
+            # Not listed -> skip entirely
+            continue
+
+        kept = [(ch, fp) for ch, fp in files if ch in include]
+        removed = sorted([ch for ch, _ in files if ch not in include])
+
+        side_label = 'Left' if side == 'L' else 'Right'
+        print(f"Include list: {key} -> keeping {len(kept)}/{len(files)} channels")
+        if removed:
+            print(f"  Excluding channels: {removed}")
+
+        if kept:
+            out[(region, side)] = kept
+        else:
+            print(f"  WARNING: include list removed all channels for {key}; skipping group.")
+
+    return out
+
+
 # ──────────────────────────────────────────────
 # CSV output
 # ──────────────────────────────────────────────
@@ -369,45 +465,55 @@ def build_csv(group_key, channel_files, output_dir, blacklist=None,
     region, side = group_key
     side_label = 'Left' if side == 'L' else 'Right'
 
-    # Filter out blacklisted channels
+    # Keep full list for loading and CAR; blacklist only affects which channels go to proxy/CSV
+    channel_files_full = list(channel_files)
+    n_total = len(channel_files_full)
+
+    n_included = n_total
     if blacklist:
-        original_count = len(channel_files)
-        channel_files = [(ch, fp) for ch, fp in channel_files
-                         if (region, side, ch) not in blacklist]
-        removed = original_count - len(channel_files)
-        if removed > 0:
-            print(f"\n  {region} {side_label}: {removed} channel(s) blacklisted, "
-                  f"{len(channel_files)} remaining")
+        n_excluded = sum(1 for ch, _ in channel_files_full if (region, side, ch) in blacklist)
+        n_included = n_total - n_excluded
+        if n_excluded > 0:
+            print(f"\n  {region} {side_label}: {n_excluded} channel(s) blacklisted, "
+                  f"{n_included} used for proxy (CAR still uses all {n_total} channels)")
+        if n_included == 0:
+            print(f"\n  {region} {side_label}: ALL channels blacklisted, skipping.")
+            return None, [], [], None
 
-    if not channel_files:
-        print(f"\n  {region} {side_label}: ALL channels blacklisted, skipping.")
-        return None, [], [], None
+    print(f"\nProcessing {region} {side_label} ({n_total} channels for CAR, "
+          f"{n_included if blacklist else n_total} for proxy)...")
 
-    print(f"\nProcessing {region} {side_label} ({len(channel_files)} channels)...")
-
-    # Step 1: Load all signals
+    # Step 1: Load all signals (every channel in the group)
     print(f"  Loading signals...")
     signals = []
-    channels = []
     fs_val = None
-    for channel, filepath in channel_files:
+    for channel, filepath in channel_files_full:
         print(f"    ch{channel}: {os.path.basename(filepath)}")
         signal, fs = load_signal_from_mat(filepath)
         signals.append(signal)
-        channels.append(channel)
         fs_val = fs
 
     n_bins = min(len(s) // num_samples for s in signals)
 
-    # Step 2: Apply CAR (subtract mean across channels, bin-by-bin, before HP)
-    print(f"  Applying Common Average Reference ({len(signals)} channels)...")
+    # Step 2: CAR using ALL channels (mean over all, subtract from all)
+    print(f"  Applying Common Average Reference (all {len(signals)} channels)...")
     apply_car_inplace(signals, n_bins, num_samples)
 
-    # Step 3: HP -> NEO -> mean per channel
-    print(f"  Running HP + NEO...")
+    # Step 3: Which channels to include in proxy/CSV (exclude blacklisted)
+    if blacklist:
+        included_indices = [i for i in range(n_total)
+                           if (region, side, channel_files_full[i][0]) not in blacklist]
+    else:
+        included_indices = list(range(n_total))
+
+    # Step 4: HP -> NEO -> mean only for included channels
+    print(f"  Running HP + NEO on {len(included_indices)} channel(s)...")
     all_binned = []
-    for i, (channel, signal) in enumerate(zip(channels, signals)):
-        binned = process_signal(signal, fs_val, n_bins, cutoff=cutoff, k=k,
+    channels = []
+    for i in included_indices:
+        ch = channel_files_full[i][0]
+        channels.append(ch)
+        binned = process_signal(signals[i], fs_val, n_bins, cutoff=cutoff, k=k,
                                 num_samples=num_samples, filter_order=filter_order)
         all_binned.append(binned)
 
@@ -637,6 +743,8 @@ def main():
         print("  Blacklist disabled (CURRENT_PATIENT or CURRENT_PERIOD not set)\n")
 
     groups = discover_and_group(input_folder)
+    if INCLUDE_ENABLE:
+        groups = apply_include_list_from_py(groups, INCLUDE_PY_PATH)
 
     if not groups:
         print("No matching .mat files found.")

@@ -18,5 +18,13 @@
 !validate_roc.py
 !correlation_check.py
 !path.txt
+!adc_plot.py
+!binary_plot.py
+!fastProxyV5
+!fastProxyV7
+!include_channels.py
+!test.py
+!combined_adc_proxy_plot.py
+!closed_loop_trigger_update.cpp
 # !plot.py
 !README.md
