@@ -20,7 +20,7 @@ MIN_SNR = 0
 SIDE_TO_PLOT = "L"   # "L", "R", or None
 
 # Include-channel toggle
-INCLUDE_ENABLE = True
+INCLUDE_ENABLE = False
 INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
 
 # Plot styling
@@ -270,7 +270,7 @@ def load_valid_raster_units(
                 "cluster": cl_idx + 1,
                 "times_ms": times,
             })
-
+        # print(f"Loaded {len(units)} valid raster units")
     return units
 
 
