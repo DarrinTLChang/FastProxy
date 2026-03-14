@@ -57,6 +57,9 @@ BLACKLIST_ENABLE = {
 CURRENT_PATIENT = "s531"   # e.g. "s523"
 CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appears in CSV)
 
+# Output directory for CSVs and plots. Used when no second CLI argument is given. Set to None to use input_folder.
+OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2'
+
 
 # ──────────────────────────────────────────────
 # Blacklist loader
@@ -723,7 +726,10 @@ def main():
         return
 
     input_folder = args[0]
-    output_folder = args[1] if len(args) > 1 else input_folder
+    output_folder = (
+        args[1] if len(args) > 1
+        else (OUTPUT_FOLDER if OUTPUT_FOLDER else input_folder)
+    )
 
     if not os.path.isdir(input_folder):
         print(f"Error: '{input_folder}' is not a valid directory.")
