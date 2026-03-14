@@ -3,15 +3,19 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-CSV_PATH = r"C:\Users\darri\OneDrive\Documents\GitHub\FastProxy\s531_output\p1-3_output\p1_output\hemisphere_neo_binned.csv"
+# CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day1/Baseline/fastProxy/Period3/hemisphere_neo_binned.csv'
+
+# CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2/hemisphere_neo_binned.csv'
+CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period3/hemisphere_neo_binned.csv'
+
 
 # Horizontal threshold line (same units as proxy). Set to None to disable.
-THRESHOLD = 90  # e.g. 1e7
+THRESHOLD = None  # e.g. 1e7
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
     time_s = data[:, 0]
     L_proxy = data[:, 1]
-    # R_proxy = data[:, 2]
+    R_proxy = data[:, 2]
 
     fig = make_subplots(
         rows=2,
@@ -26,11 +30,11 @@ def main():
         row=1,
         col=1,
     )
-    # fig.add_trace(
-    #     go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
-    #     row=2,
-    #     col=1,
-    # )
+    fig.add_trace(
+        go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
+        row=2,
+        col=1,
+    )
 
     fig.update_yaxes(title_text="hemisphere_L_median_proxy", row=1, col=1)
     fig.update_yaxes(title_text="hemisphere_R_median_proxy", row=2, col=1)

@@ -11,7 +11,7 @@ from sklearn.metrics import roc_curve, auc
 # CONFIG
 # ══════════════════════════════════════════════
 BURST_PAD_BEFORE = 0.020   # 20 ms before burst_start
-BURST_PAD_AFTER  = 0.00   # 100 ms after burst_end
+BURST_PAD_AFTER  = 0.000   # 0 ms after burst_end
 
 
 def load_proxy(csv_path):
@@ -38,19 +38,27 @@ def create_burst_labels(time_s, burst_starts, burst_ends):
     return labels
 
 
-def find_f1_threshold(fpr, tpr, thresholds, n_pos, n_neg):
-    """Find threshold that maximizes F1 = 2*precision*recall / (precision+recall)."""
-    tp = tpr * n_pos
-    fp = fpr * n_neg
-    precision = np.where((tp + fp) > 0, tp / (tp + fp), 0.0)
-    f1 = np.where((precision + tpr) > 0, 2 * precision * tpr / (precision + tpr), 0.0)
-    idx = np.argmax(f1)
+def find_youden_j_threshold(fpr, tpr, thresholds):
+    """
+    Find threshold that maximizes Youden's J:
+        J = sensitivity + specificity - 1 = TPR - FPR
+    """
+    j_scores = tpr - fpr
+
+    # Avoid choosing the initial inf threshold if present
+    finite_mask = np.isfinite(thresholds)
+    if np.any(finite_mask):
+        valid_indices = np.where(finite_mask)[0]
+        best_local_idx = np.argmax(j_scores[finite_mask])
+        idx = valid_indices[best_local_idx]
+    else:
+        idx = np.argmax(j_scores)
+
     return {
         'threshold': thresholds[idx],
         'sensitivity': tpr[idx],
         'specificity': 1 - fpr[idx],
-        'precision': precision[idx],
-        'f1': f1[idx],
+        'youden_j': j_scores[idx],
         'fpr': fpr[idx],
         'tpr': tpr[idx],
     }
@@ -60,8 +68,16 @@ def plot_roc(fpr, tpr, auc_score, optimal, side_label, output_path):
     fig, ax = plt.subplots(figsize=(7, 7))
     ax.plot(fpr, tpr, color='steelblue', linewidth=2, label=f'ROC (AUC = {auc_score:.4f})')
     ax.plot([0, 1], [0, 1], color='gray', linestyle='--', linewidth=1, label='Random')
-    ax.plot(optimal['fpr'], optimal['tpr'], 'b^', markersize=10,
-            label=f'F1={optimal["f1"]:.2f} (sens={optimal["sensitivity"]:.2f}, prec={optimal["precision"]:.2f})')
+    ax.plot(
+        optimal['fpr'],
+        optimal['tpr'],
+        'b^',
+        markersize=10,
+        label=(
+            f"Youden's J = {optimal['youden_j']:.2f} "
+            f"(sens={optimal['sensitivity']:.2f}, spec={optimal['specificity']:.2f})"
+        )
+    )
     ax.set_xlabel('False Positive Rate')
     ax.set_ylabel('True Positive Rate')
     ax.set_title(f'ROC — {side_label}\nAUC = {auc_score:.4f}', fontweight='bold')
@@ -73,26 +89,6 @@ def plot_roc(fpr, tpr, auc_score, optimal, side_label, output_path):
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
     print(f"    -> {output_path}")
-
-
-def plot_proxy_with_bursts(time_s, proxy, burst_starts, burst_ends,
-                           side_label, output_path, threshold):
-    import plotly.graph_objects as go
-    fig = go.Figure()
-    fig.add_trace(go.Scattergl(x=time_s, y=proxy, mode='lines',
-                               line=dict(color='steelblue', width=0.5), name='Proxy'))
-    for s, e in zip(burst_starts, burst_ends):
-        fig.add_vrect(x0=s, x1=e, fillcolor='red', opacity=0.15, line_width=0)
-    if threshold is not None and np.isfinite(threshold):
-        fig.add_hline(y=threshold, line_dash='dash', line_color='blue', line_width=2,
-                      annotation_text=f'F1 threshold: {threshold:.3e}',
-                      annotation_position='top left', annotation_font_color='blue')
-    fig.update_layout(title=f'{side_label} — Proxy with Burst Windows',
-                      xaxis_title='Time (s)', yaxis_title='Proxy Value',
-                      yaxis=dict(exponentformat='e'), template='plotly_white', height=500)
-    html_path = output_path.replace('.png', '.html')
-    fig.write_html(html_path)
-    print(f"    -> {html_path}")
 
 
 def analyze_side(time_s, proxy, burst_csv, side_key, output_dir):
@@ -109,42 +105,36 @@ def analyze_side(time_s, proxy, burst_csv, side_key, output_dir):
     print(f"\n  {side_label}: {len(burst_starts)} bursts, {n_pos} burst bins ({100*n_pos/len(labels):.1f}%)")
 
     if n_pos == 0 or n_neg == 0:
-        print(f"    Cannot compute ROC.")
+        print("    Cannot compute ROC.")
         return None
 
     fpr, tpr, thresholds = roc_curve(labels, proxy)
     auc_score = auc(fpr, tpr)
-    opt = find_f1_threshold(fpr, tpr, thresholds, n_pos, n_neg)
-
-    burst_mean = np.mean(proxy[labels == 1])
-    nonburst_mean = np.mean(proxy[labels == 0])
-    ratio = burst_mean / nonburst_mean if nonburst_mean > 0 else 0
+    opt = find_youden_j_threshold(fpr, tpr, thresholds)
 
     print(f"    AUC:         {auc_score:.4f}")
-    print(f"    F1 thresh:   {opt['threshold']:.4e}")
+    print(f"    J thresh:    {opt['threshold']:.4e}")
     print(f"    Sensitivity: {opt['sensitivity']:.4f}")
-    print(f"    Precision:   {opt['precision']:.4f}")
     print(f"    Specificity: {opt['specificity']:.4f}")
-    print(f"    F1:          {opt['f1']:.4f}")
-    print(f"    Burst/non-burst ratio: {ratio:.2f}x")
+    print(f"    Youden's J:  {opt['youden_j']:.4f}")
 
     os.makedirs(output_dir, exist_ok=True)
-    plot_roc(fpr, tpr, auc_score, opt, side_label,
-             os.path.join(output_dir, f'roc_{side_key}.png'))
-    plot_proxy_with_bursts(time_s, proxy, burst_starts, burst_ends,
-                           side_label, os.path.join(output_dir, f'proxy_{side_key}.html'),
-                           threshold=opt['threshold'])
+    plot_roc(
+        fpr,
+        tpr,
+        auc_score,
+        opt,
+        side_label,
+        os.path.join(output_dir, f'roc_{side_key}.png')
+    )
 
     return {
-        'side': side_label, 'auc': round(auc_score, 4),
-        'threshold_f1': f'{opt["threshold"]:.4e}',
+        'side': side_label,
+        'auc': round(auc_score, 4),
+        'threshold_youden_j': f'{opt["threshold"]:.4e}',
         'sensitivity': round(opt['sensitivity'], 4),
-        'precision': round(opt['precision'], 4),
         'specificity': round(opt['specificity'], 4),
-        'f1': round(opt['f1'], 4),
-        'burst_mean': f'{burst_mean:.4e}',
-        'nonburst_mean': f'{nonburst_mean:.4e}',
-        'ratio': round(ratio, 2),
+        'youden_j': round(opt['youden_j'], 4),
         'n_burst_bins': n_pos,
         'n_nonburst_bins': n_neg,
         'pct_burst': round(100.0 * n_pos / len(labels), 2),
@@ -152,15 +142,29 @@ def analyze_side(time_s, proxy, burst_csv, side_key, output_dir):
 
 
 def main():
-    if len(sys.argv) < 4:
+    if len(sys.argv) == 2 and os.path.isfile(sys.argv[1]):
+        with open(sys.argv[1], 'r') as f:
+            lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+        if len(lines) < 1:
+            print("Args file must contain at least proxy_csv path (one path per line).")
+            sys.exit(1)
+        proxy_csv = lines[0]
+        burst_L = None if len(lines) <= 1 or lines[1].lower() == 'none' else lines[1]
+        burst_R = None if len(lines) <= 2 or lines[2].lower() == 'none' else lines[2]
+        out_dir = lines[3] if len(lines) > 3 else './validation_output'
+    elif len(sys.argv) < 4:
         print("Usage: python validate_roc.py <proxy_csv> <burst_left> <burst_right> [output_dir]")
         print("  Use 'none' if a side has no burst data.")
+        print()
+        print("  Or:  python validate_roc.py <args_file>")
+        print("  Args file: one path per line — proxy_csv, burst_left, burst_right, output_dir")
+        print("  Use 'none' on a line for a missing burst file.")
         sys.exit(1)
-
-    proxy_csv = sys.argv[1]
-    burst_L = sys.argv[2] if sys.argv[2].lower() != 'none' else None
-    burst_R = sys.argv[3] if sys.argv[3].lower() != 'none' else None
-    out_dir = sys.argv[4] if len(sys.argv) > 4 else './validation_output'
+    else:
+        proxy_csv = sys.argv[1]
+        burst_L = sys.argv[2] if sys.argv[2].lower() != 'none' else None
+        burst_R = sys.argv[3] if sys.argv[3].lower() != 'none' else None
+        out_dir = sys.argv[4] if len(sys.argv) > 4 else './validation_output'
 
     print(f"Proxy: {proxy_csv}")
     print(f"Padding: -{BURST_PAD_BEFORE*1000:.0f}ms / +{BURST_PAD_AFTER*1000:.0f}ms")
@@ -170,12 +174,16 @@ def main():
     print(f"  {len(time_s)} bins loaded")
 
     results = []
+
     if 'L' in proxy_data and burst_L:
         r = analyze_side(time_s, proxy_data['L'], burst_L, 'L', out_dir)
-        if r: results.append(r)
+        if r:
+            results.append(r)
+
     if 'R' in proxy_data and burst_R:
         r = analyze_side(time_s, proxy_data['R'], burst_R, 'R', out_dir)
-        if r: results.append(r)
+        if r:
+            results.append(r)
 
     if results:
         fields = list(results[0].keys())
