@@ -4,8 +4,7 @@ import re
 import sys
 from collections import defaultdict
 import h5py
-import matplotlib.pyplot as plt
-#added blacklist
+import plotly.graph_objects as go
 
 # ══════════════════════════════════════════════
 # GLOBAL CONFIG — change these once here
@@ -29,7 +28,7 @@ NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
 # Notes:
 # - The include list is defined in the text file below (recommended).
 #
-INCLUDE_ENABLE = True
+INCLUDE_ENABLE = False
 
 # Include list is stored in `include_channels.py` so it's easy to comment out.
 INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
@@ -618,22 +617,37 @@ def plot_median_proxy(csv_path, t_start=0, t_end=100):
     proxy_col = -1
     proxy_label = header[proxy_col]
 
+    plot_full = t_end is None
+    if t_end is None:
+        t_end = float(np.nanmax(time_s))
     mask = (time_s >= t_start) & (time_s <= t_end)
     t = time_s[mask]
     y = data[mask, proxy_col]
 
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(t, y, linewidth=0.5, color='steelblue')
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('NEO Median Proxy')
-    ax.set_title(f'{proxy_label}  [{t_start}–{t_end} s]')
-    ax.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0))
-    fig.tight_layout()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=t,
+            y=y,
+            mode='lines',
+            line=dict(width=1, color='steelblue'),
+            name=proxy_label,
+        )
+    )
+    fig.update_layout(
+        template='plotly_white',
+        height=400,
+        title=dict(text=f'{proxy_label}  [{t_start}–{t_end:.1f} s]'),
+        xaxis_title='Time (s)',
+        yaxis_title='NEO Median Proxy',
+        yaxis_tickformat='.2e',
+        margin=dict(t=50, b=50, l=60, r=40),
+    )
 
-    png_path = csv_path.replace('.csv', f'_plot_{t_start}-{t_end}s.png')
-    fig.savefig(png_path, dpi=150)
-    print(f"  -> Plot saved: {png_path}")
-    plt.close(fig)
+    suffix = 'full' if plot_full else f'{t_start}-{t_end}s'
+    html_path = csv_path.replace('.csv', f'_plot_{suffix}.html')
+    fig.write_html(html_path, include_plotlyjs='cdn')
+    print(f"  -> Plot saved: {html_path}")
 
 
 # ──────────────────────────────────────────────
@@ -789,7 +803,7 @@ def main():
 
     if do_plot:
         for csv_path in csv_paths:
-            plot_median_proxy(csv_path, t_start=0, t_end=150)
+            plot_median_proxy(csv_path, t_start=0, t_end=None)
 
 
 if __name__ == '__main__':

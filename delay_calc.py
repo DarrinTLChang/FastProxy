@@ -4,8 +4,8 @@ import numpy as np
 # ============================================================
 # USER SETTINGS
 # ============================================================
-ADC_CSV_PATH   = r"F:\s531\processed data from 531\Mat Data\E\CL testing\period2\ADC1.csv"
-PROXY_CSV_PATH = r"G:\closed loop testing\recorded binary files\proxy_feature_record2.csv"
+ADC_CSV_PATH   = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded binary files/Mat Data/E/CL testing/period2/ADC1.csv'
+PROXY_CSV_PATH = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded binary files/proxy_feature_record2.csv'
 
 THRESHOLD = 90   # <-- set your threshold here
 MIN_SEPARATION_S = 0.0  # optional: minimum time between proxy trigger events

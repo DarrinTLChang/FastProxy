@@ -11,12 +11,27 @@ from scipy.io import loadmat
 # =============================================================================
 # PATHS / SETTINGS
 # =============================================================================
-ADC_CSV_PATH = r"D:\s531\processed data from 531\Mat Data\E\CL testing\period2\ADC1.csv"
-PROXY_CSV_PATH = r"D:\closed loop testing\recorded binary files\proxy_feature_record2.csv"
-SPIKETIME_MAT_PATH = r"D:\s531\processed data from 531\Mat Data\Z\CL testing\spikes_v4_varcluster_sameClusters\micro_CommonFiltered_0_01Hz\period2\SpikeClusters_3std_wav\spikeTime.mat"
+# ADC_CSV_PATH = r"D:\s531\processed data from 531\Mat Data\E\CL testing\period2\ADC1.csv"
+ADC_CSV_PATH = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded binary files/Mat Data/E/CL testing/period2/ADC1.csv'
+
+
+# PROXY_CSV_PATH = r"D:\closed loop testing\recorded binary files\proxy_feature_record2.csv"
+PROXY_CSV_PATH = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded binary files/proxy_feature_record2.csv'
+
+# SPIKETIME_MAT_PATH = r"D:\s531\processed data from 531\Mat Data\Z\CL testing\spikes_v4_varcluster_sameClusters\micro_CommonFiltered_0_01Hz\period2\SpikeClusters_3std_wav\spikeTime.mat"
+SPIKETIME_MAT_PATH = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded binary files/Mat Data/Z/CL testing/spikes_v4_varcluster_sameClusters/micro_CommonFiltered_0_01Hz/period2/SpikeClusters_3std_wav/spikeTime.mat'
+
+BURST_RS_CSV_PATH = (
+    '/Volumes/D_Drive/SangerLabBursts/outputs_RS_burst/day1_test/Period2/rankSurprise/'
+    'separateGPi__SNR=1.2-25.0__FR=0.8Hz__aClust=8%__limClust=75__aReg=5%__limReg=75__aNet=3%__limNet=75__minSpk=3__minDur=0ms__minCh=0__region__network/'
+    'network_bursts_RS_left.csv'
+)
+
+OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_output/Day1/closed_test_p1-3_output/p2/plot'
 
 THRESHOLD = 90
-MIN_SNR = 0
+MIN_SNR = 1.2
+MAX_SNR = 10000
 SIDE_TO_PLOT = "L"   # "L", "R", or None
 
 # Include-channel toggle
@@ -27,6 +42,7 @@ INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
 RASTER_DOT_SIZE = 5
 RASTER_OPACITY = 0.8
 STIM_FILL_COLOR = "rgba(0, 200, 0, 0.18)"
+BURST_FILL_COLOR = "rgba(200, 0, 0, 0.18)"
 
 
 # =============================================================================
@@ -187,6 +203,7 @@ def parse_electrode_name(elec: str):
 def load_valid_raster_units(
     spiketime_mat_path: str,
     min_snr: float,
+    max_snr: float = np.inf,
     side_to_plot: str | None = None,
     include_enable: bool = False,
     include_py_path: str | None = None,
@@ -256,7 +273,7 @@ def load_valid_raster_units(
 
         for cl_idx in range(n_clusters):
             snr = snr_vals[cl_idx] if cl_idx < len(snr_vals) else np.nan
-            if not np.isfinite(snr) or snr < min_snr:
+            if not np.isfinite(snr) or snr < min_snr or snr > max_snr:
                 continue
             if cl_idx >= len(times_list):
                 continue
@@ -320,6 +337,7 @@ def main():
     require_file(ADC_CSV_PATH, "ADC CSV")
     require_file(PROXY_CSV_PATH, "Proxy CSV")
     require_file(SPIKETIME_MAT_PATH, "SpikeTime MAT")
+    require_file(BURST_RS_CSV_PATH, "Burst RS CSV")
 
     if INCLUDE_ENABLE:
         print(f"Include-channel filtering enabled: {INCLUDE_PY_PATH}")
@@ -328,8 +346,8 @@ def main():
 
     # ── ADC: stimulation only ────────────────────────────────────────────────
     adc_df = pd.read_csv(ADC_CSV_PATH, low_memory=False)
-    if "stimulation" not in adc_df.columns:
-        raise ValueError(f'ADC CSV must contain "stimulation". Found: {list(adc_df.columns)}')
+    # if "stimulation" not in adc_df.columns:
+    #     raise ValueError(f'ADC CSV must contain "stimulation". Found: {list(adc_df.columns)}')
 
     if "time_s" in adc_df.columns:
         adc_time = pd.to_numeric(adc_df["time_s"], errors="coerce")
@@ -343,6 +361,17 @@ def main():
     stim_bool = stim_bool[adc_mask].to_numpy(dtype=bool)
 
     stim_intervals = compute_true_intervals(adc_time, stim_bool)
+
+    # ── Burst RS intervals (burst_start_ms, burst_end_ms) ────────────────────────
+    burst_df = pd.read_csv(BURST_RS_CSV_PATH, low_memory=False)
+    if "burst_start_ms" not in burst_df.columns or "burst_end_ms" not in burst_df.columns:
+        raise ValueError(
+            f"Burst CSV must contain 'burst_start_ms' and 'burst_end_ms'. Found: {list(burst_df.columns)}"
+        )
+    burst_start_s = pd.to_numeric(burst_df["burst_start_ms"], errors="coerce") / 1000.0
+    burst_end_s = pd.to_numeric(burst_df["burst_end_ms"], errors="coerce") / 1000.0
+    burst_mask = burst_start_s.notna() & burst_end_s.notna() & (burst_start_s < burst_end_s)
+    burst_intervals = list(zip(burst_start_s[burst_mask].to_numpy(), burst_end_s[burst_mask].to_numpy()))
 
     # ── Proxy ────────────────────────────────────────────────────────────────
     proxy_df = pd.read_csv(PROXY_CSV_PATH, low_memory=False)
@@ -365,6 +394,7 @@ def main():
     units = load_valid_raster_units(
         SPIKETIME_MAT_PATH,
         MIN_SNR,
+        max_snr=MAX_SNR,
         side_to_plot=SIDE_TO_PLOT,
         include_enable=INCLUDE_ENABLE,
         include_py_path=INCLUDE_PY_PATH,
@@ -401,6 +431,16 @@ def main():
             x0=x0,
             x1=x1,
             fillcolor=STIM_FILL_COLOR,
+            line_width=0,
+            layer="below",
+        )
+
+    # Red shading for burst RS intervals
+    for x0, x1 in burst_intervals:
+        fig.add_vrect(
+            x0=float(x0),
+            x1=float(x1),
+            fillcolor=BURST_FILL_COLOR,
             line_width=0,
             layer="below",
         )
@@ -450,8 +490,10 @@ def main():
         ),
     )
 
-    base = os.path.splitext(PROXY_CSV_PATH)[0]
-    html_path = base + "_proxy_stimulation_shading_raster.html"
+    stimchan_subdir = f"StimChan={INCLUDE_ENABLE}"
+    out_dir = os.path.join(OUTPUT_FOLDER, stimchan_subdir)
+    os.makedirs(out_dir, exist_ok=True)
+    html_path = os.path.join(out_dir, "proxy_stimulation_shading_raster.html")
     fig.write_html(html_path, include_plotlyjs="cdn")
     print(f"Saved {html_path}")
 
