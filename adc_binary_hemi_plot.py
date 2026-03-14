@@ -21,6 +21,7 @@ PROXY_CSV_PATH = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded bi
 # SPIKETIME_MAT_PATH = r"D:\s531\processed data from 531\Mat Data\Z\CL testing\spikes_v4_varcluster_sameClusters\micro_CommonFiltered_0_01Hz\period2\SpikeClusters_3std_wav\spikeTime.mat"
 SPIKETIME_MAT_PATH = r'/Volumes/D_Drive/s531_data/Day1/ClosedLoopTesting/recorded binary files/Mat Data/Z/CL testing/spikes_v4_varcluster_sameClusters/micro_CommonFiltered_0_01Hz/period2/SpikeClusters_3std_wav/spikeTime.mat'
 
+
 BURST_RS_CSV_PATH = (
     '/Volumes/D_Drive/SangerLabBursts/outputs_RS_burst/day1_test/Period2/rankSurprise/'
     'separateGPi__SNR=1.2-25.0__FR=0.8Hz__aClust=8%__limClust=75__aReg=5%__limReg=75__aNet=3%__limNet=75__minSpk=3__minDur=0ms__minCh=0__region__network/'

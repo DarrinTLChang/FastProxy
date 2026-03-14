@@ -6,7 +6,7 @@ from plotly.subplots import make_subplots
 # CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day1/Baseline/fastProxy/Period3/hemisphere_neo_binned.csv'
 
 # CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2/hemisphere_neo_binned.csv'
-CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period3/hemisphere_neo_binned.csv'
+CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day4/baseline_output/hemisphere_neo_binned.csv'
 
 
 # Horizontal threshold line (same units as proxy). Set to None to disable.
