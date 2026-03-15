@@ -28,7 +28,7 @@ NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
 # Notes:
 # - The include list is defined in the text file below (recommended).
 #
-INCLUDE_ENABLE = False
+INCLUDE_ENABLE = True
 
 # Include list is stored in `include_channels.py` so it's easy to comment out.
 INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
@@ -59,7 +59,7 @@ CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appear
 
 # Output directory for CSVs and plots. Used when no second CLI argument is given. Set to None to use input_folder.
 # OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2'
-OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day4_test/p6/includeChannel=False'
+OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p8/includeChannel=True'
 
 
 # ──────────────────────────────────────────────
