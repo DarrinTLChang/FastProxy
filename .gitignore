@@ -26,4 +26,6 @@
 !adc_binary_hemi_plot
 !combined_adc_proxy_plot.py
 # !plot.py
+!per_chan_roc.py
+!per_chan_prox_plot.py
 !README.md
