@@ -111,15 +111,18 @@ static const int PROXY_CHANNELS[] = {
 static const int N_PROXY_CH = (int)(sizeof(PROXY_CHANNELS) / sizeof(PROXY_CHANNELS[0]));
 
 // Biquad HP coefficients: 350 Hz, fs=24414.0625, order 2, a0=1
-// IMPORTANT:
-// These coefficients are copied from the Python code. If those coefficients were
-// designed for fs=24414 exactly, then the C++ result will match the Python code.
-// If you redesign them for fs=24414.0625 later, both Python and C++ should be updated together.
 static const double B0 = 0.938290861982229;
 static const double B1 = -1.876581723964458;
 static const double B2 = 0.938290861982229;
 static const double A1 = -1.872770074080853;
 static const double A2 = 0.880393373848063;
+
+// Biquad LP coefficients: 2950 Hz, fs=24414.0625, order 2, a0=1
+static const double LP_B0 = 0.092356639761006;
+static const double LP_B1 = 0.184713279522012;
+static const double LP_B2 = 0.092356639761006;
+static const double LP_A1 = -0.975802281994301;
+static const double LP_A2 = 0.345228841038325;
 
 // ---- local recording ----
 static const int  RECORD_DET_CH = 1;                         // 1=enable raw DET_CH recording
@@ -187,17 +190,16 @@ static inline float sample_to_stream_units(const uint8_t* p, int bps)
 
 // Biquad state for one proxy channel.
 // This exactly mirrors the Python BiquadHP object state.
-struct BiquadHPState
+struct BiquadState
 {
-    double x1, x2, y1, y2;
+    double hp_x1, hp_x2, hp_y1, hp_y2;
+    double lp_x1, lp_x2, lp_y1, lp_y2;
 };
 
-static inline void reset_biquad_state(BiquadHPState& st)
+static inline void reset_biquad_state(BiquadState& st)
 {
-    st.x1 = 0.0;
-    st.x2 = 0.0;
-    st.y1 = 0.0;
-    st.y2 = 0.0;
+    st.hp_x1 = 0.0; st.hp_x2 = 0.0; st.hp_y1 = 0.0; st.hp_y2 = 0.0;
+    st.lp_x1 = 0.0; st.lp_x2 = 0.0; st.lp_y1 = 0.0; st.lp_y2 = 0.0;
 }
 
 // Process one FRAME for one channel:
@@ -206,25 +208,22 @@ static inline void reset_biquad_state(BiquadHPState& st)
 // - run the biquad HP sample-by-sample
 // - write filtered output into filtOut[0..FRAME-1]
 // - persistent state is updated in-place
-static inline void biquad_hp_process_frame_from_raw(
+static inline void biquad_bp_process_frame_from_raw(
     const std::vector<uint8_t>& rawBytes,
     int bps,
     int ch,
     int nChan,
-    BiquadHPState& st,
+    BiquadState& st,
     float* filtOut)
 {
-    double x1 = st.x1;
-    double x2 = st.x2;
-    double y1 = st.y1;
-    double y2 = st.y2;
+    double hx1 = st.hp_x1, hx2 = st.hp_x2, hy1 = st.hp_y1, hy2 = st.hp_y2;
+    double lx1 = st.lp_x1, lx2 = st.lp_x2, ly1 = st.lp_y1, ly2 = st.lp_y2;
 
     for (int i = 0; i < FRAME; i++)
     {
         const uint8_t* p = sample_ptr_channel_major(rawBytes, bps, FRAME, ch, i);
         double x = (double)sample_to_stream_units(p, bps);
 
-        // Optional lead-wise CAR (10 channels per lead)
         if (ENABLE_LEAD_CAR)
         {
             int leadStart = (ch / 10) * 10;
@@ -239,21 +238,24 @@ static inline void biquad_hp_process_frame_from_raw(
                 sum += (double)sample_to_stream_units(lp, bps);
                 cnt++;
             }
-            double mean = sum / (double)cnt;
-            x = x - mean;
+            x -= sum / (double)cnt;
         }
 
-        double y = B0 * x + B1 * x1 + B2 * x2 - A1 * y1 - A2 * y2;
+        // HP 350 Hz
+        double hp = B0 * x + B1 * hx1 + B2 * hx2 - A1 * hy1 - A2 * hy2;
+        hx2 = hx1; hx1 = x;
+        hy2 = hy1; hy1 = hp;
 
-        x2 = x1; x1 = x;
-        y2 = y1; y1 = y;
-        filtOut[i] = (float)y;
+        // LP 2950 Hz
+        double lp = LP_B0 * hp + LP_B1 * lx1 + LP_B2 * lx2 - LP_A1 * ly1 - LP_A2 * ly2;
+        lx2 = lx1; lx1 = hp;
+        ly2 = ly1; ly1 = lp;
+
+        filtOut[i] = (float)lp;
     }
 
-    st.x1 = x1;
-    st.x2 = x2;
-    st.y1 = y1;
-    st.y2 = y2;
+    st.hp_x1 = hx1; st.hp_x2 = hx2; st.hp_y1 = hy1; st.hp_y2 = hy2;
+    st.lp_x1 = lx1; st.lp_x2 = lx2; st.lp_y1 = ly1; st.lp_y2 = ly2;
 }
 
 // Mean NEO over one FRAME for one channel.
@@ -323,7 +325,7 @@ static inline float compute_proxy_feature_over_frame(
     int nChan,
     const int* proxyChannels,
     int nProxyCh,
-    BiquadHPState* filterStates,
+    BiquadState* filterStates,
     float* prevFilteredLast,
     float* filtTmp,
     float* chVals)
@@ -332,7 +334,7 @@ static inline float compute_proxy_feature_over_frame(
     {
         int ch = proxyChannels[c];
 
-        biquad_hp_process_frame_from_raw(rawBytes, bps, ch, nChan, filterStates[c], filtTmp);
+        biquad_bp_process_frame_from_raw(rawBytes, bps, ch, nChan, filterStates[c], filtTmp);
         chVals[c] = mean_neo_over_frame(filtTmp, prevFilteredLast[c]);
         prevFilteredLast[c] = filtTmp[FRAME - 1];
     }
@@ -456,7 +458,7 @@ int main(int argc, char** argv)
 
         // Proxy persistent state for this streaming session.
         // These must persist across consecutive frames to match the Python code.
-        std::vector<BiquadHPState> proxyFilterStates(N_PROXY_CH);
+        std::vector<BiquadState> proxyFilterStates(N_PROXY_CH);
         std::vector<float> proxyPrevFilteredLast(N_PROXY_CH, 0.0f);
         std::vector<float> proxyFiltTmp(FRAME);
         std::vector<float> proxyChVals(N_PROXY_CH);

@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import plotly.graph_objects as go
 
-FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p8/includeChannel=False'
+FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=False'
 SKIP = "hemisphere_neo_binned.csv"
 
 

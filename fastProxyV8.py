@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 # GLOBAL CONFIG — change these once here
 # ══════════════════════════════════════════════
 HIGHPASS_CUTOFF  = 350       # Hz
+LOWPASS_CUTOFF   = 2950      # Hz
 NEO_K            = 1
 NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
 
@@ -28,7 +29,7 @@ NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
 # Notes:
 # - The include list is defined in the text file below (recommended).
 #
-INCLUDE_ENABLE = True
+INCLUDE_ENABLE = False
 
 # Include list is stored in `include_channels.py` so it's easy to comment out.
 INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
@@ -59,7 +60,7 @@ CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appear
 
 # Output directory for CSVs and plots. Used when no second CLI argument is given. Set to None to use input_folder.
 # OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2'
-OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=True_testChan'
+OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=False/HP_LP'
 
 
 # ──────────────────────────────────────────────
@@ -228,40 +229,96 @@ class BiquadHighpass:
         return out
 
 
-class CascadedHighpass:
+def compute_biquad_lowpass_coeffs(fs, cutoff):
     """
-    Cascade multiple biquad sections for higher-order filtering.
+    Compute biquad lowpass coefficients using the bilinear transform.
+    Mirrors compute_biquad_highpass_coeffs but for a lowpass.
 
-    Order 2 = 1 biquad  (12 dB/oct)  — 5 mult/sample
-    Order 4 = 2 biquads (24 dB/oct)  — 10 mult/sample
-    Order 6 = 3 biquads (36 dB/oct)  — 15 mult/sample
-
-    Only even orders supported (each biquad = order 2).
+    Returns (b0, b1, b2, a1, a2) with a0 normalized to 1.
     """
+    wc = 2 * np.pi * cutoff
+    T = 1 / fs
+    wc_warped = (2 / T) * np.tan(wc * T / 2)
+    K = wc_warped * T / 2
 
-    def __init__(self, fs, cutoff, order=2):
-        if order % 2 != 0:
-            raise ValueError("Biquad cascade requires even order (2, 4, 6, ...)")
-        n_sections = order // 2
-        self.sections = [BiquadHighpass(fs, cutoff) for _ in range(n_sections)]
-        self.order = order
+    denom = K**2 + np.sqrt(2) * K + 1
+
+    b0 = K**2 / denom
+    b1 = 2.0 * K**2 / denom
+    b2 = K**2 / denom
+
+    a1 = (2 * K**2 - 2) / denom
+    a2 = (K**2 - np.sqrt(2) * K + 1) / denom
+
+    return b0, b1, b2, a1, a2
+
+
+class BiquadLowpass:
+    """Single biquad lowpass section. Same structure as BiquadHighpass."""
+
+    def __init__(self, fs, cutoff):
+        self.b0, self.b1, self.b2, self.a1, self.a2 = \
+            compute_biquad_lowpass_coeffs(fs, cutoff)
+        self.x1 = 0.0
+        self.x2 = 0.0
+        self.y1 = 0.0
+        self.y2 = 0.0
 
     def reset(self):
-        for s in self.sections:
-            s.reset()
+        self.x1 = self.x2 = self.y1 = self.y2 = 0.0
 
     def process_sample(self, x):
-        """Pass one sample through all biquad sections in series."""
-        y = x
-        for s in self.sections:
-            y = s.process_sample(y)
+        y = (self.b0 * x
+             + self.b1 * self.x1
+             + self.b2 * self.x2
+             - self.a1 * self.y1
+             - self.a2 * self.y2)
+        self.x2 = self.x1
+        self.x1 = x
+        self.y2 = self.y1
+        self.y1 = y
         return y
 
     def process_chunk(self, chunk):
-        """Filter a numpy array through the cascade."""
+        out = np.empty(len(chunk))
+        for n in range(len(chunk)):
+            out[n] = self.process_sample(chunk[n])
+        return out
+
+
+class CascadedBandpass:
+    """
+    HP biquad cascade followed by a single LP biquad.
+    Result: bandpass from hp_cutoff to lp_cutoff.
+
+    Cost per sample: (5 * hp_sections + 5) multiplies.
+    """
+
+    def __init__(self, fs, hp_cutoff, lp_cutoff, order=2):
+        if order % 2 != 0:
+            raise ValueError("Biquad cascade requires even order (2, 4, 6, ...)")
+        n_sections = order // 2
+        self.hp_sections = [BiquadHighpass(fs, hp_cutoff) for _ in range(n_sections)]
+        self.lp = BiquadLowpass(fs, lp_cutoff)
+        self.order = order
+
+    def reset(self):
+        for s in self.hp_sections:
+            s.reset()
+        self.lp.reset()
+
+    def process_sample(self, x):
+        y = x
+        for s in self.hp_sections:
+            y = s.process_sample(y)
+        y = self.lp.process_sample(y)
+        return y
+
+    def process_chunk(self, chunk):
         out = chunk.copy()
-        for s in self.sections:
+        for s in self.hp_sections:
             out = s.process_chunk(out)
+        out = self.lp.process_chunk(out)
         return out
 
 
@@ -322,18 +379,18 @@ def apply_car_inplace(signals, n_bins, num_samples):
 
 
 def process_signal(signal, fs, n_bins, cutoff=HIGHPASS_CUTOFF, k=NEO_K,
-                   num_samples=NUM_SAMPLES, filter_order=2):
+                   num_samples=NUM_SAMPLES, filter_order=2, lp_cutoff=LOWPASS_CUTOFF):
     """
-    Run HP -> NEO -> mean per bin on an already-loaded (and CAR'd) signal.
+    Run BP (HP+LP) -> NEO -> mean per bin on an already-loaded (and CAR'd) signal.
 
     For each bin of num_samples:
-      1. Biquad highpass filter (state carries across bins)
+      1. Biquad bandpass filter (HP then LP, state carries across bins)
       2. NEO with k=1, using lookback from previous bin (N-1 values per N-sample bin)
       3. Mean of the NEO output for that bin
 
     Returns 1D array of per-bin means.
     """
-    hp = CascadedHighpass(fs, cutoff, order=filter_order)
+    hp = CascadedBandpass(fs, cutoff, lp_cutoff, order=filter_order)
     bin_means = np.zeros(n_bins)
     prev = 0.0
 
@@ -662,24 +719,33 @@ def plot_median_proxy(csv_path, t_start=0, t_end=100):
 # Print coefficients (for hardcoding on hardware)
 # ──────────────────────────────────────────────
 
-def print_coefficients(fs, cutoff, order=2):
+def print_coefficients(fs, hp_cutoff, lp_cutoff, order=2):
     """Print the biquad coefficients you'd hardcode on your device."""
     n_sections = order // 2
     print(f"\n{'='*50}")
-    print(f"Biquad Highpass Coefficients")
-    print(f"  fs={fs} Hz, cutoff={cutoff} Hz, order={order} ({n_sections} section(s))")
+    print(f"Biquad Bandpass Coefficients")
+    print(f"  fs={fs} Hz, HP={hp_cutoff} Hz, LP={lp_cutoff} Hz")
+    print(f"  order={order} ({n_sections} HP section(s) + 1 LP section)")
     print(f"{'='*50}")
 
-    b0, b1, b2, a1, a2 = compute_biquad_highpass_coeffs(fs, cutoff)
+    b0, b1, b2, a1, a2 = compute_biquad_highpass_coeffs(fs, hp_cutoff)
+    print(f"\n  // Highpass biquad section (all HP sections identical for Butterworth):")
+    print(f"  const double B0  = {b0:.15f};")
+    print(f"  const double B1  = {b1:.15f};")
+    print(f"  const double B2  = {b2:.15f};")
+    print(f"  const double A1  = {a1:.15f};")
+    print(f"  const double A2  = {a2:.15f};")
 
-    print(f"\n  // Per biquad section (all sections identical for Butterworth):")
-    print(f"  const float b0 = {b0:.15f};")
-    print(f"  const float b1 = {b1:.15f};")
-    print(f"  const float b2 = {b2:.15f};")
-    print(f"  const float a1 = {a1:.15f};")
-    print(f"  const float a2 = {a2:.15f};")
+    lb0, lb1, lb2, la1, la2 = compute_biquad_lowpass_coeffs(fs, lp_cutoff)
+    print(f"\n  // Lowpass biquad section:")
+    print(f"  const double LP_B0 = {lb0:.15f};")
+    print(f"  const double LP_B1 = {lb1:.15f};")
+    print(f"  const double LP_B2 = {lb2:.15f};")
+    print(f"  const double LP_A1 = {la1:.15f};")
+    print(f"  const double LP_A2 = {la2:.15f};")
+
     print(f"\n  // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]")
-    print(f"  // Cascade {n_sections} section(s) in series for order {order}")
+    print(f"  // Chain: {n_sections} HP section(s) -> 1 LP section")
     print()
 
 
@@ -689,7 +755,7 @@ def print_coefficients(fs, cutoff, order=2):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python fastProxyV6.py <input_folder> [output_folder] [--plot] [--order=2] [--coeffs]")
+        print("Usage: python fastProxyV8.py <input_folder> [output_folder] [--plot] [--order=2] [--coeffs]")
         print("       [--patient=ID] [--period=P]")
         print()
         print("  --order=N     : filter order (must be even: 2, 4, 6). Default: 2")
@@ -723,11 +789,11 @@ def main():
                                 if ds.ndim == 0 or (ds.ndim >= 1 and ds.size == 1):
                                     fs = int(np.squeeze(ds[()]))
                         if fs:
-                            print_coefficients(fs, HIGHPASS_CUTOFF, filter_order)
+                            print_coefficients(fs, HIGHPASS_CUTOFF, LOWPASS_CUTOFF, filter_order)
                             return
         print("Could not determine fs. Printing for common rates:")
         for fs in [24000, 30000, 44100, 48000]:
-            print_coefficients(fs, HIGHPASS_CUTOFF, filter_order)
+            print_coefficients(fs, HIGHPASS_CUTOFF, LOWPASS_CUTOFF, filter_order)
         return
 
     input_folder = args[0]
@@ -751,8 +817,8 @@ def main():
         elif a.startswith('--period='):
             period = a.split('=', 1)[1].strip()
 
-    print(f"Config: cutoff={HIGHPASS_CUTOFF}Hz, biquad order={filter_order} "
-          f"({filter_order//2} section(s)), k={NEO_K}, num_samples={NUM_SAMPLES}\n")
+    print(f"Config: HP={HIGHPASS_CUTOFF}Hz, LP={LOWPASS_CUTOFF}Hz, biquad order={filter_order} "
+          f"({filter_order//2} HP section(s) + 1 LP section), k={NEO_K}, num_samples={NUM_SAMPLES}\n")
 
     # Load channel blacklist for this patient/period only
     blacklist = set()

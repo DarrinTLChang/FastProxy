@@ -6,13 +6,13 @@ import csv
 from collections import defaultdict
 import h5py
 from scipy.signal import welch
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
 
 # ══════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════
-HARMONICS       = (60, 120, 180, 240, 300, 360)
+HARMONICS       = (60, 120, 180, 240, 300, 360,420,480,540,600,660,720,780,840)
 BANDWIDTH       = 2.0       # Hz around each harmonic to measure peak
 OUTLIER_THRESH  = 3.0       # STDs above group mean to flag
 
@@ -140,7 +140,7 @@ def load_signal(filepath):
 
 def compute_psd(signal, fs, nperseg=None):
     if nperseg is None:
-        nperseg = min(len(signal), fs * 2)
+        nperseg = min(len(signal), fs * 40)
     freqs, psd = welch(signal, fs=fs, nperseg=nperseg)
     return freqs, psd
 
@@ -312,11 +312,14 @@ def analyze_period(micro_path, output_dir, patient, period,
             all_labels = [f'ch{r["channel"]}' for r in results]
             all_outlier = [r['is_outlier'] for r in results]
 
-            plot_psd_grid(
-                all_freqs, all_psds, all_labels, all_outlier,
-                title=f'{patient} {period} {group_key} PSD — Individual Channels',
-                output_path=os.path.join(output_dir, f'{group_key}_psd_grid.png')
-            )
+            ch_plot_dir = os.path.join(output_dir, f'{group_key}_channels')
+            for idx in range(len(all_freqs)):
+                plot_psd_single(
+                    all_freqs[idx], all_psds[idx],
+                    all_labels[idx], all_outlier[idx],
+                    title_prefix=f'{patient} {period} {group_key}',
+                    output_dir=ch_plot_dir,
+                )
 
             plot_psd_overlay(
                 all_freqs, all_psds, all_labels, all_outlier,
@@ -338,52 +341,45 @@ def analyze_period(micro_path, output_dir, patient, period,
 # Plotting
 # ──────────────────────────────────────────────
 
-def plot_psd_grid(all_freqs, all_psds, all_labels, all_outlier, title, output_path,
-                  freq_max=500):
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    n = len(all_freqs)
-    cols = min(n, 4)
-    rows = (n + cols - 1) // cols
+def plot_psd_single(freqs, psd, label, outlier, title_prefix, output_dir,
+                    freq_max=5000):
+    """Write one interactive HTML per channel."""
+    os.makedirs(output_dir, exist_ok=True)
 
-    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3 * rows), squeeze=False)
-    fig.suptitle(title, fontsize=14, fontweight='bold')
+    mask = freqs <= freq_max
+    color = 'red' if outlier else 'steelblue'
+    status = "OUTLIER" if outlier else "OK"
 
-    for idx in range(rows * cols):
-        ax = axes[idx // cols][idx % cols]
-        if idx >= n:
-            ax.set_visible(False)
-            continue
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(
+        x=freqs[mask], y=psd[mask],
+        mode='lines', line=dict(width=1, color=color),
+        name=label,
+    ))
 
-        freqs = all_freqs[idx]
-        psd = all_psds[idx]
-        label = all_labels[idx]
-        outlier = all_outlier[idx]
+    for harm in HARMONICS:
+        if harm <= freq_max:
+            fig.add_vline(x=harm, line=dict(color='gray', width=0.5, dash='dash'), opacity=0.6)
 
-        mask = freqs <= freq_max
-        color = 'red' if outlier else 'steelblue'
+    fig.update_layout(
+        template='plotly_white',
+        height=400,
+        title=f'{title_prefix} — {label} [{status}]',
+        xaxis_title='Frequency (Hz)',
+        yaxis_title='PSD',
+        yaxis_type='log',
+        margin=dict(t=50, b=50, l=60, r=40),
+    )
 
-        ax.semilogy(freqs[mask], psd[mask], linewidth=0.6, color=color)
-        for harm in HARMONICS:
-            if harm <= freq_max:
-                ax.axvline(harm, color='gray', linestyle='--', linewidth=0.5, alpha=0.7)
-
-        status = "OUTLIER" if outlier else "OK"
-        ax.set_title(f'{label} [{status}]', fontsize=10,
-                     color='red' if outlier else 'black')
-        ax.set_xlabel('Freq (Hz)', fontsize=8)
-        ax.set_ylabel('PSD', fontsize=8)
-        ax.tick_params(labelsize=7)
-
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
-    plt.close(fig)
-    print(f"      -> Grid plot: {output_path}")
+    html_path = os.path.join(output_dir, f'{label}_psd.html')
+    fig.write_html(html_path, include_plotlyjs='cdn')
+    print(f"      -> {html_path}")
 
 
 def plot_psd_overlay(all_freqs, all_psds, all_labels, all_outlier, title, output_path,
                      freq_max=500):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig = go.Figure()
 
     for i in range(len(all_freqs)):
         freqs = all_freqs[i]
@@ -393,24 +389,35 @@ def plot_psd_overlay(all_freqs, all_psds, all_labels, all_outlier, title, output
 
         mask = freqs <= freq_max
         color = 'red' if outlier else 'steelblue'
-        alpha = 0.9 if outlier else 0.4
-        lw = 1.0 if outlier else 0.5
+        opacity = 0.9 if outlier else 0.4
+        lw = 1.5 if outlier else 0.8
 
-        ax.semilogy(freqs[mask], psd[mask], linewidth=lw, color=color,
-                     alpha=alpha, label=label)
+        fig.add_trace(go.Scattergl(
+            x=freqs[mask], y=psd[mask],
+            mode='lines',
+            line=dict(width=lw, color=color),
+            opacity=opacity,
+            name=label,
+        ))
 
     for harm in HARMONICS:
         if harm <= freq_max:
-            ax.axvline(harm, color='orange', linestyle=':', linewidth=0.5, alpha=0.5)
+            fig.add_vline(x=harm, line=dict(color='orange', width=0.5, dash='dot'), opacity=0.5)
 
-    ax.set_xlabel('Frequency (Hz)')
-    ax.set_ylabel('PSD')
-    ax.set_title(title, fontweight='bold')
-    ax.legend(fontsize=7, ncol=4, loc='upper right')
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
-    plt.close(fig)
-    print(f"      -> Overlay: {output_path}")
+    fig.update_layout(
+        template='plotly_white',
+        height=500, width=1000,
+        title=title,
+        xaxis_title='Frequency (Hz)',
+        yaxis_title='PSD',
+        yaxis_type='log',
+        legend=dict(font=dict(size=9)),
+        margin=dict(t=50, b=50, l=60, r=40),
+    )
+
+    html_path = output_path.replace('.png', '.html')
+    fig.write_html(html_path, include_plotlyjs='cdn')
+    print(f"      -> Overlay: {html_path}")
 
 
 def plot_noise_bar(results, group_median, mad, threshold_mads, title, output_path):
@@ -420,23 +427,31 @@ def plot_noise_bar(results, group_median, mad, threshold_mads, title, output_pat
     outliers = [r['is_outlier'] for r in results]
     colors = ['red' if o else 'steelblue' for o in outliers]
 
-    fig, ax = plt.subplots(figsize=(max(8, len(channels) * 0.8), 5))
-    ax.bar(channels, totals, color=colors, alpha=0.8)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=channels, y=totals,
+        marker_color=colors, opacity=0.8,
+        name='Total Harmonic Noise',
+    ))
 
     thresh_val = group_median + threshold_mads * mad
-    ax.axhline(thresh_val, color='red', linestyle='--', linewidth=1,
-               label=f'Outlier threshold ({threshold_mads} MADs)')
-    ax.axhline(group_median, color='gray', linestyle='-', linewidth=1,
-               label='Group median')
+    fig.add_hline(y=thresh_val, line=dict(color='red', width=1, dash='dash'),
+                  annotation_text=f'Outlier threshold ({threshold_mads} MADs)')
+    fig.add_hline(y=group_median, line=dict(color='gray', width=1),
+                  annotation_text='Group median')
 
-    ax.set_ylabel('Total Harmonic Noise Power')
-    ax.set_title(title, fontweight='bold')
-    ax.legend(fontsize=8)
-    ax.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0))
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
-    plt.close(fig)
-    print(f"      -> Bar chart: {output_path}")
+    fig.update_layout(
+        template='plotly_white',
+        height=500, width=max(600, len(channels) * 60),
+        title=title,
+        yaxis_title='Total Harmonic Noise Power',
+        yaxis_tickformat='.2e',
+        margin=dict(t=50, b=50, l=80, r=40),
+    )
+
+    html_path = output_path.replace('.png', '.html')
+    fig.write_html(html_path, include_plotlyjs='cdn')
+    print(f"      -> Bar chart: {html_path}")
 
 
 # ──────────────────────────────────────────────
