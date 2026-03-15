@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
-CSV_PATH = r"G:\closed loop testing\recorded binary files\proxy_feature_record1.csv"
+CSV_PATH = r'/Volumes/D_Drive/s531_bin_data/Day4/period4/proxy_feature_record.csv'
 
 # Columns to plot
 X_COL = "time_s"

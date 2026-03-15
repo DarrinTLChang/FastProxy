@@ -6,9 +6,9 @@ import plotly.graph_objects as go
 
 
 # Paths (edit if needed)
-ADC_CSV_PATH = r"F:\s531\processed data from 531\Mat Data\E\CL testing\period2\ADC1.csv"
-PROXY_CSV_PATH = r"G:\closed loop testing\recorded binary files\proxy_feature_record2.csv"
-HEMI_CSV_PATH = r"C:\Users\Maral\Desktop\Darrin\FastProxy\s531_output\V7_day1Channels_531_Period2_validation\hemisphere_neo_binned.csv"
+ADC_CSV_PATH = r'/Users/darrin/Downloads/march 14 closed loop testing/ADCs/period4/ADC1.csv'
+PROXY_CSV_PATH = r'/Volumes/D_Drive/s531_bin_data/Day4/period4/proxy_feature_record.csv'
+HEMI_CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day4_test/p4/includeChannel=True/hemisphere_neo_binned.csv'
 
 # Set to a number (e.g. 1e7) to draw the line, or None to disable.
 THRESHOLD = 90
@@ -131,7 +131,7 @@ def main():
     )
 
     # Save HTML next to proxy CSV
-    base = os.path.splitext(PROXY_CSV_PATH)[0]
+    base = os.path.splitext(HEMI_CSV_PATH)[0]
     html_path = base + "_adc_overlay_plot.html"
     fig.write_html(html_path, include_plotlyjs="cdn")
     print(f"Saved {html_path}")

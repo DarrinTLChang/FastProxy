@@ -6,16 +6,14 @@ from plotly.subplots import make_subplots
 # CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day1/Baseline/fastProxy/Period3/hemisphere_neo_binned.csv'
 
 # CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2/hemisphere_neo_binned.csv'
-CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day4/baseline_output/hemisphere_neo_binned.csv'
-
-
+CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day4_test/p4/includeChannel=True/hemisphere_neo_binned.csv'
+plot_R = False
 # Horizontal threshold line (same units as proxy). Set to None to disable.
 THRESHOLD = None  # e.g. 1e7
 def main():
     data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
     time_s = data[:, 0]
     L_proxy = data[:, 1]
-    R_proxy = data[:, 2]
 
     fig = make_subplots(
         rows=2,
@@ -30,14 +28,18 @@ def main():
         row=1,
         col=1,
     )
-    fig.add_trace(
-        go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
-        row=2,
-        col=1,
-    )
+    if plot_R:
+        R_proxy = data[:, 2]
+
+        fig.add_trace(
+            go.Scattergl(x=time_s, y=R_proxy, mode="lines", line=dict(color="coral", width=1), name="hemisphere_R_median_proxy"),
+            row=2,
+            col=1,
+        )
+        fig.update_yaxes(title_text="hemisphere_R_median_proxy", row=2, col=1)
+
 
     fig.update_yaxes(title_text="hemisphere_L_median_proxy", row=1, col=1)
-    fig.update_yaxes(title_text="hemisphere_R_median_proxy", row=2, col=1)
     fig.update_xaxes(title_text="Time (s)", row=2, col=1)
 
     fig.update_layout(
