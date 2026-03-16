@@ -17,9 +17,9 @@ ADC_CSV_PATH = None
 
 # Use one of these:
 PROXY_CSV_PATH = None
-FASTPROXY_CSV_PATH = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=False/hemisphere_neo_binned.csv'
+FASTPROXY_CSV_PATH = r"E:\s531_fp_output\Day5_baseline\p9\includeChannel=False\hemisphere_neo_binned.csv"
 # '/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=True_VO/VA/GPi1/hemisphere_neo_binned_plot_full.html'
-SPIKETIME_MAT_PATH = r'/Volumes/D_Drive/s531_data/Day1/Baseline/Mat Data/Z/test/spikes_v4_varcluster_sameClusters/micro_CommonFiltered/period9/SpikeClusters_3std_wav/spikeTime.mat'
+SPIKETIME_MAT_PATH = r"E:\s531_data\Day1\Baseline\Mat Data\Z\test\spikes_v4_varcluster_sameClusters\micro_CommonFiltered\period9\SpikeClusters_3std_wav\spikeTime.mat"
 
 OUTPUT_FOLDER = (
     os.path.dirname(FASTPROXY_CSV_PATH) if FASTPROXY_CSV_PATH

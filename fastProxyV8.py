@@ -60,7 +60,7 @@ CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appear
 
 # Output directory for CSVs and plots. Used when no second CLI argument is given. Set to None to use input_folder.
 # OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2'
-OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=False/HP_LP'
+OUTPUT_FOLDER = r"E:\s531_fp_output\Day5_baseline\p9\includeChannel=False\HP_LP"
 
 
 # ──────────────────────────────────────────────
