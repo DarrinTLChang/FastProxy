@@ -1,53 +1,30 @@
-import os
-
 import pandas as pd
 import plotly.graph_objects as go
 
+path = r"F:\s531_binary\period8\period8_bin.csv"
+# Read time_s and proxy_feature; coerce to numeric (handles headers/mixed types)
+df = pd.read_csv(path, usecols=["time_s", "proxy_feature"], low_memory=False)
+df["time_s"] = pd.to_numeric(df["time_s"], errors="coerce")
+df["proxy_feature"] = pd.to_numeric(df["proxy_feature"], errors="coerce")
+df = df.dropna()
 
-CSV_PATH = r'/Volumes/D_Drive/s531_bin_data/Day4/period4/proxy_feature_record.csv'
+x = df["time_s"].to_numpy()
+y = df["proxy_feature"].to_numpy()
+x_label = "time_s"
+y_label = "proxy_feature"
 
-# Columns to plot
-X_COL = "time_s"
-Y_COL = "feature_value"
+fig = go.Figure()
+fig.add_trace(go.Scattergl(x=x, y=y, mode="lines", line=dict(width=1), name=y_label))
+fig.update_layout(
+    title="ADC2.csv",
+    template="plotly_white",
+    xaxis_title=x_label,
+    yaxis_title=y_label,
+    height=450,
+)
 
+html_path = path.replace(".csv", "_plot.html")
+fig.write_html(html_path, include_plotlyjs="cdn")
+print(f"Saved {html_path}")
 
-def main():
-    df = pd.read_csv(CSV_PATH, low_memory=False)
-
-    if X_COL not in df.columns or Y_COL not in df.columns:
-        raise ValueError(
-            f"Missing expected columns. Wanted x='{X_COL}', y='{Y_COL}'. "
-            f"Found: {list(df.columns)}"
-        )
-
-    x = pd.to_numeric(df[X_COL], errors="coerce")
-    y = pd.to_numeric(df[Y_COL], errors="coerce")
-    mask = x.notna() & y.notna()
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scattergl(
-            x=x[mask],
-            y=y[mask],
-            mode="lines",
-            line=dict(width=1),
-            name=Y_COL,
-        )
-    )
-    fig.update_layout(
-        title=os.path.basename(CSV_PATH),
-        template="plotly_white",
-        xaxis_title=X_COL,
-        yaxis_title=Y_COL,
-        height=450,
-    )
-
-    html_path = os.path.splitext(CSV_PATH)[0] + "_plot.html"
-    fig.write_html(html_path, include_plotlyjs="cdn")
-    print(f"Saved {html_path}")
-    fig.show()
-
-
-if __name__ == "__main__":
-    main()
-
+fig.show()
