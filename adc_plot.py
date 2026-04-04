@@ -1,8 +1,10 @@
 import pandas as pd
 import plotly.graph_objects as go
-from plotly_resampler import FigureResampler
 
-path = r"F:\s531\processed data from 531\CL testing\macro\period8\ADC2.csv"
+from plotly_resampler import FigureResampler  # pyright: ignore[reportMissingImports]
+
+# path = r"F:\s531\processed data from 531\CL testing\macro\period8\ADC2.csv"
+path = r"F:\s531_binary\period8_test\offline\hemisphere_neo_binned.csv"
 # Max points drawn per view while panning/zooming (full series kept as hf_x/hf_y)
 MAX_N_SAMPLES = 8000
 

@@ -17,23 +17,27 @@ ADC_CSV_PATH = None
 
 # Use one of these:
 PROXY_CSV_PATH = None
-FASTPROXY_CSV_PATH = r"E:\s531_fp_output\Day5_baseline\p9\includeChannel=False\hemisphere_neo_binned.csv"
+# FASTPROXY_CSV_PATH = r"E:\s531_fp_output\Day5_baseline\p9\includeChannel=False\hemisphere_neo_binned.csv"
+FASTPROXY_CSV_PATH = r"F:\s531_binary\period2_test\offline_sel\hemisphere_neo_binned.csv"
+
 # '/Volumes/D_Drive/s531_fp_output/Day5_baseline/p9/includeChannel=True_VO/VA/GPi1/hemisphere_neo_binned_plot_full.html'
-SPIKETIME_MAT_PATH = r"E:\s531_data\Day1\Baseline\Mat Data\Z\test\spikes_v4_varcluster_sameClusters\micro_CommonFiltered\period9\SpikeClusters_3std_wav\spikeTime.mat"
+SPIKETIME_MAT_PATH = r"F:\s531\processed data from 531\Mat Data\Z\CL testing\spikes_v4_varcluster_sameClusters\micro_CommonFiltered_0_01Hz\period2\SpikeClusters_3std_wav\spikeTime.mat"
 
 OUTPUT_FOLDER = (
     os.path.dirname(FASTPROXY_CSV_PATH) if FASTPROXY_CSV_PATH
     else (os.path.dirname(PROXY_CSV_PATH) if PROXY_CSV_PATH else os.path.join(os.path.dirname(__file__), "adc_binary_hemi_plot_output"))
 )
-BURST_RS_CSV_PATH = (
-    '/Volumes/D_Drive/SangerLabBursts/outputs_RS_burst/day5_baseline/Period9/rankSurprise/separateGPi__SNR=1.2-1000__FR=0.8Hz__aClust=8%__limClust=75__aReg=5%__limReg=75__aNet=3%__limNet=75__minSpk=3__minDur=0ms__minCh=0__region__network/network_bursts_RS_left.csv'
-)
+BURST_RS_CSV_PATH = None
+# (
+#     '/Volumes/D_Drive/SangerLabBursts/outputs_RS_burst/day5_baseline/Period9/rankSurprise/separateGPi__SNR=1.2-1000__FR=0.8Hz__aClust=8%__limClust=75__aReg=5%__limReg=75__aNet=3%__limNet=75__minSpk=3__minDur=0ms__minCh=0__region__network/network_bursts_RS_left.csv'
+# )
 
 
 THRESHOLD = 90
 MIN_SNR = 1.2
 MAX_SNR = 10000
 SIDE_TO_PLOT = "L"   # "L", "R", or None
+FASTPROXY_SHIFT_S = 0.021  # shift FastProxy time to the right (seconds)
 
 # Include-channel toggle
 INCLUDE_ENABLE = False
@@ -371,7 +375,7 @@ def load_signal_data(side: str | None):
             if mask.any():
                 signals.append({
                     "side": "L",
-                    "time": time_s[mask].to_numpy(),
+                    "time": time_s[mask].to_numpy() + FASTPROXY_SHIFT_S,
                     "value": val[mask].to_numpy(),
                     "label": left_col,
                 })
@@ -382,7 +386,7 @@ def load_signal_data(side: str | None):
             if mask.any():
                 signals.append({
                     "side": "R",
-                    "time": time_s[mask].to_numpy(),
+                    "time": time_s[mask].to_numpy() + FASTPROXY_SHIFT_S,
                     "value": val[mask].to_numpy(),
                     "label": right_col,
                 })

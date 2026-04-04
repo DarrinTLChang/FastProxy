@@ -1,31 +1,25 @@
-# Ignore everything by default
+# Ignore everything by default; track only listed root files.
 *
 
-# Track only these files
 !.gitignore
-!fastProxyV2.py
-!fastProxyV3.py
-!fastProxyV4.py
-!fastProxyV5.py
-!fastProxyV6.py
+!abnormal_peak.py
+!adc_binary_overlay_plot.py
+!adc_plot.py
+!add_trig_label.py
+!batch_postStim.py
+!binary_plot.py
+!delay_calc.py
+!environment.yml
 !fastProxyV7.py
 !fastProxyV8.py
-!psd_remove.py
-!highpass.py
-!abnormal_peak.py
-!test.py
-!PO8eExample.cpp
-!plot_all_region_proxies.py
-!plot_hemisphere_proxy.py
-!validate_roc.py
-!correlation_check.py
+!fastProxyV9.py
+!include_channels.py
 !path.txt
-!ADCtoCSV.m
-!adc_binary_hemi_plot.py
-!delay_calc.py
-!adc_binary_hemi_plot
-!combined_adc_proxy_plot.py
-# !plot.py
-!per_chan_roc.py
 !per_chan_prox_plot.py
+!plot_all_region_proxies.py
+!plot_raster.py
+!postStim.py
+!postStim_fire_skip.py
+!psd_remove.py
 !README.md
+!test.py

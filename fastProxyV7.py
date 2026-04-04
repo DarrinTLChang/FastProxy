@@ -59,7 +59,7 @@ CURRENT_PERIOD = "period1" # e.g. "1" or "period1" (must match how period appear
 
 # Output directory for CSVs and plots. Used when no second CLI argument is given. Set to None to use input_folder.
 # OUTPUT_FOLDER = r'/Volumes/D_Drive/s531_fp_output/Day2/Baseline/fastProxy/Period2'
-OUTPUT_FOLDER = r"E:\s531_fp_output\Day5_baseline\p9\includeChannel=True_GPi1R"
+OUTPUT_FOLDER = r"E:\s531_fp_output\Day5_test\p7\includeChannel=False"
 
 
 # ──────────────────────────────────────────────
@@ -282,7 +282,7 @@ def load_signal_from_mat(filepath):
                     fs = int(np.squeeze(dataset[()]))
             elif dataset.ndim >= 1 and dataset.size > 1000:
                 if signal is None:
-                    signal = np.squeeze(dataset[()]).astype(float)
+                    signal = np.squeeze(dataset[()]).astype(float)* 1e6
 
     if signal is None or fs is None:
         with h5py.File(filepath, 'r') as f:
@@ -540,7 +540,7 @@ def build_csv(group_key, channel_files_full, output_dir, blacklist=None,
     os.makedirs(output_dir, exist_ok=True)
     csv_name = f'micro{region}_{side}_neo_binned.csv'
     csv_path = os.path.join(output_dir, csv_name)
-    np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
+    np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6f')
     bin_ms = num_samples / fs_val * 1000
     print(f"  -> Saved: {csv_path}")
     print(f"     {n_bins} bins, {len(channels)} channels, fs={fs_val} Hz, {bin_ms:.2f} ms/bin")
@@ -599,7 +599,7 @@ def build_hemisphere_csv(hemisphere_bins, output_dir, fs, num_samples=NUM_SAMPLE
     os.makedirs(output_dir, exist_ok=True)
     csv_name = 'hemisphere_neo_binned.csv'
     csv_path = os.path.join(output_dir, csv_name)
-    np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6e')
+    np.savetxt(csv_path, out_data, delimiter=',', header=header, comments='', fmt='%.6f')
 
     for side in sides_with_data:
         side_label = 'Left' if side == 'L' else 'Right'
