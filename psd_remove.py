@@ -5,7 +5,7 @@ import sys
 import csv
 from collections import defaultdict
 import h5py
-from scipy.signal import welch
+from scipy.signal import welch, spectrogram
 import plotly.graph_objects as go
 
 
@@ -16,6 +16,10 @@ HARMONICS       = (60, 120, 180, 240, 300, 360,420,480,540,600,660,720,780,840)
 BANDWIDTH       = 2.0       # Hz around each harmonic to measure peak
 OUTLIER_THRESH  = 3.0       # STDs above group mean to flag
 
+SPECTRO_FMAX     = 2950.0    # Hz; cap displayed frequency to keep heatmap manageable
+SPECTRO_NPERSEG  = 4096     # STFT window length (samples)
+SPECTRO_OVERLAP  = 0.5      # fraction overlap between windows
+
 
 # ──────────────────────────────────────────────
 # File parsing
@@ -23,7 +27,7 @@ OUTLIER_THRESH  = 3.0       # STDs above group mean to flag
 
 def parse_mat_filename(filename):
     name = os.path.splitext(filename)[0]
-    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)$', name)
+    match = re.match(r'^micro([A-Za-z0-9]+)_([LR])_(\d+)(?:_CommonFiltered)?$', name)
     if not match:
         return None
     region, side, channel = match.groups()
@@ -33,6 +37,8 @@ def parse_mat_filename(filename):
 def group_mat_files(folder):
     groups = defaultdict(list)
     for fname in os.listdir(folder):
+        if fname.startswith('._'):
+            continue
         if not fname.lower().endswith('.mat'):
             continue
         parsed = parse_mat_filename(fname)
@@ -55,13 +61,15 @@ def list_mat_files(folder, recursive=False):
         return [
             os.path.join(folder, f)
             for f in sorted(os.listdir(folder))
-            if f.lower().endswith('.mat') and os.path.isfile(os.path.join(folder, f))
+            if not f.startswith('._')
+            and f.lower().endswith('.mat')
+            and os.path.isfile(os.path.join(folder, f))
         ]
 
     paths = []
     for root, _, files in os.walk(folder):
         for f in sorted(files):
-            if f.lower().endswith('.mat'):
+            if not f.startswith('._') and f.lower().endswith('.mat'):
                 paths.append(os.path.join(root, f))
     return paths
 
@@ -143,6 +151,18 @@ def compute_psd(signal, fs, nperseg=None):
         nperseg = min(len(signal), fs * 40)
     freqs, psd = welch(signal, fs=fs, nperseg=nperseg)
     return freqs, psd
+
+
+def compute_spectrogram(signal, fs, nperseg=SPECTRO_NPERSEG,
+                        overlap=SPECTRO_OVERLAP, fmax=SPECTRO_FMAX):
+    nperseg = int(min(nperseg, len(signal)))
+    noverlap = int(nperseg * overlap)
+    f, t, Sxx = spectrogram(signal, fs=fs, nperseg=nperseg, noverlap=noverlap)
+    if fmax is not None:
+        mask = f <= fmax
+        f = f[mask]
+        Sxx = Sxx[mask, :]
+    return f, t, Sxx
 
 
 def measure_harmonic_power(freqs, psd, harmonics=HARMONICS, bandwidth=BANDWIDTH):
@@ -247,6 +267,16 @@ def analyze_period(micro_path, output_dir, patient, period,
             })
             all_freqs.append(freqs)
             all_psds.append(psd)
+
+            if save_plots:
+                sf, st, sSxx = compute_spectrogram(signal, fs)
+                spec_dir = os.path.join(output_dir, f'{group_key}_spectrograms')
+                plot_spectrogram_single(
+                    sf, st, sSxx,
+                    label=f'ch{channel}',
+                    title_prefix=f'{patient} {period} {group_key}',
+                    output_dir=spec_dir,
+                )
 
         results, group_median, mad = find_outlier_channels(channel_data, threshold_std)
 
@@ -372,6 +402,33 @@ def plot_psd_single(freqs, psd, label, outlier, title_prefix, output_dir,
     )
 
     html_path = os.path.join(output_dir, f'{label}_psd.html')
+    fig.write_html(html_path, include_plotlyjs='cdn')
+    print(f"      -> {html_path}")
+
+
+def plot_spectrogram_single(f, t, Sxx, label, title_prefix, output_dir):
+    """Write one interactive spectrogram heatmap (dB) HTML per channel."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    Sxx_db = 10.0 * np.log10(Sxx + 1e-30)
+
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(
+        x=t, y=f, z=Sxx_db,
+        colorscale='Viridis',
+        colorbar=dict(title='Power (dB)'),
+    ))
+
+    fig.update_layout(
+        template='plotly_white',
+        height=400,
+        title=f'{title_prefix} — {label} spectrogram',
+        xaxis_title='Time (s)',
+        yaxis_title='Frequency (Hz)',
+        margin=dict(t=50, b=50, l=60, r=40),
+    )
+
+    html_path = os.path.join(output_dir, f'{label}_spectrogram.html')
     fig.write_html(html_path, include_plotlyjs='cdn')
     print(f"      -> {html_path}")
 

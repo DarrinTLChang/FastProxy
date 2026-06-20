@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-FOLDER = r"F:\s531_binary\period8_test_LP\offline_all"
+FOLDER = "/Volumes/DarrinX10/s532_offlineFP_2950/Period 6"
 SKIP = "hemisphere_neo_binned.csv"
 
 
@@ -73,7 +73,7 @@ def main():
                 title=f"{base} — {col}",
                 xaxis_title="Time (s)",
                 yaxis_title=col,
-                yaxis=dict(range=[0,20]),
+                yaxis=dict(range=[0,120]),
                 template="plotly_white",
                 height=500,
             )
@@ -99,7 +99,7 @@ def main():
                 ),
                 row=i, col=1,
             )
-            combined.update_yaxes(title_text=col, range=[0, 20], row=i, col=1)
+            combined.update_yaxes(title_text=col, range=[0, 120], row=i, col=1)
 
         combined.update_layout(
             title=f"{base} — all channels",

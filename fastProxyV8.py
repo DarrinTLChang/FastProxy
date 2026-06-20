@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 # GLOBAL CONFIG — change these once here
 # ══════════════════════════════════════════════
 HIGHPASS_CUTOFF  = 350       # Hz
-LOWPASS_CUTOFF   = 1000      # Hz (set to None to disable)
+LOWPASS_CUTOFF   = 2950      # Hz (set to None to disable)
 NEO_K            = 1
 NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
 
@@ -18,7 +18,7 @@ NUM_SAMPLES      = 512       # samples per bin (the real-time packet size)
 # ══════════════════════════════════════════════
 # INCLUDE LIST (ALLOWLIST) — only use these channels
 # ══════════════════════════════════════════════
-INCLUDE_ENABLE = True
+INCLUDE_ENABLE = False
 INCLUDE_PY_PATH = os.path.join(os.path.dirname(__file__), "include_channels.py")
 
 
